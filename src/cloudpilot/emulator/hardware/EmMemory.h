@@ -63,7 +63,12 @@ typedef struct EmAddressBank {
 
 #ifndef ECM_DYNAMIC_PATCH
 
+#if defined(ESP_PLATFORM)
+// PalmCYD: 256KB の表は内部 RAM に入らないため、起動時に PSRAM から確保する
+extern EmAddressBank** gEmMemBanks;
+#else
 extern EmAddressBank* gEmMemBanks[65536];
+#endif
 
 #else  // ECM_DYNAMIC_PATCH
 

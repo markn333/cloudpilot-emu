@@ -60,6 +60,8 @@ int movem_next[256];    // (normally in newcpu.c)
 
 #ifdef __EMSCRIPTEN__
 cpuop_func* cpufunctbl_base;
+#elif defined(ESP_PLATFORM)
+cpuop_func** cpufunctbl = nullptr;  // PalmCYD: 256KB のため起動時に確保（内部 RAM に入らない）
 #else
 cpuop_func* cpufunctbl[65536];  // (normally in newcpu.c)
 #endif
@@ -1169,6 +1171,10 @@ void EmCPU68K::InitializeUAETables(void) {
 #ifdef __EMSCRIPTEN__
     cpuop_func** cpufunctbl =
         (cpuop_func**)malloc(0x10000 * sizeof(cpuop_func*));  // (normally in newcpu.c)
+#elif defined(ESP_PLATFORM)
+    if (cpufunctbl == nullptr) {
+        cpufunctbl = (cpuop_func**)malloc(0x10000 * sizeof(cpuop_func*));
+    }
 #endif
 
     unsigned long opcode;

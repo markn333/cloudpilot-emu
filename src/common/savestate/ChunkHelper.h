@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <string>
 #include <vector>
 
@@ -160,6 +161,18 @@ class LoadChunkHelper {
     inline LoadChunkHelper& Do16(int16_t& value);
     inline LoadChunkHelper& Do16(int16_t& v1, int16_t& v2);
     inline LoadChunkHelper& Do32(int32_t& value);
+
+    // PalmCYD: xtensa (ESP32) では int32_t / uint32_t が long 型なので、int / unsigned int も受け付ける
+    template <typename U,
+              typename std::enable_if<std::is_integral<U>::value && sizeof(U) == 4 &&
+                                          !std::is_same<U, uint32_t>::value && !std::is_same<U, int32_t>::value,
+                                      int>::type = 0>
+    inline LoadChunkHelper& Do32(U& value) {
+        uint32_t v;
+        Do32(v);
+        value = static_cast<U>(v);
+        return *this;
+    }
     inline LoadChunkHelper& Do64(int64_t& value);
     inline LoadChunkHelper& DoBool(bool& value);
     inline LoadChunkHelper& DoDouble(double& value);

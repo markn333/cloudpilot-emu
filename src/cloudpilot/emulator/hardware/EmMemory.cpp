@@ -187,7 +187,11 @@
 
 #pragma mark Globals
 
+#if defined(ESP_PLATFORM)
+EmAddressBank** gEmMemBanks = nullptr;  // PalmCYD: Memory::Initialize で確保
+#else
 EmAddressBank* gEmMemBanks[65536];  // (normally defined in memory.c)
+#endif
 
 Bool gPCInRAM;
 Bool gPCInROM;
@@ -239,6 +243,13 @@ namespace {
 
 bool Memory::Initialize(const uint8* romBuffer, size_t romSize, EmDevice& device) {
     bool success = true;
+
+#if defined(ESP_PLATFORM)
+    if (gEmMemBanks == nullptr) {
+        gEmMemBanks = static_cast<EmAddressBank**>(calloc(65536, sizeof(EmAddressBank*)));
+        if (gEmMemBanks == nullptr) return false;
+    }
+#endif
 
     regionMap = device.GetMemoryRegionMap();
 
