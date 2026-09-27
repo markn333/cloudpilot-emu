@@ -20,9 +20,22 @@
 #include "EmMemory.h"
 #include "MemoryRegion.h"
 
-set<emuptr> MetaMemory::breakpoints;
+vector<emuptr> MetaMemory::breakpoints;
+uint32 MetaMemory::breakpointFilter[32];
 
-void MetaMemory::Clear() { breakpoints.clear(); }
+void MetaMemory::Clear() {
+    breakpoints.clear();
+    RebuildBreakpointFilter();
+}
+
+void MetaMemory::RebuildBreakpointFilter() {
+    memset(breakpointFilter, 0, sizeof(breakpointFilter));
+
+    for (emuptr location : breakpoints) {
+        const uint32 bit = (location >> 1) & 1023;
+        breakpointFilter[bit >> 5] |= 1u << (bit & 31);
+    }
+}
 
 void MetaMemory::MarkRange(emuptr start, emuptr end, uint8 v) {
     if (end <= start) return;

@@ -93,6 +93,15 @@ class EmHAL {
     static void AddCycleConsumer(CycleHandler handler, void* context);
     static void RemoveCycleConsumer(CycleHandler handler, void* context);
     static void DispatchCycle(uint64 cycles, bool sleeping);
+    static size_t CycleConsumerCount();
+
+    // Fast path for the per-instruction cycle dispatch (see CYCLE in EmCPU68K.cpp).
+    // gCycleNow: system cycles as of the last executed instruction (not updated while nested).
+    // gNextCycleEvent: DispatchCycle only needs to run once gCycleNow reaches this value.
+    //   0 = dispatch on every instruction (the default; used unless the only cycle consumer
+    //   publishes its next event, as EmRegsEZ does).
+    static uint64 gCycleNow;
+    static uint64 gNextCycleEvent;
 
     static bool SupportsImageInSlot(Slot slot, uint32 blocksTotal);
     static bool SupportsImageInSlot(Slot slot, const CardImage& cardImage);

@@ -533,7 +533,6 @@ void EmPatchMgr::SetupForTailpatch(TailpatchProc tp, const SystemCallContext& co
     // for the the PC/opcode we want to save.
 
     EmAssert(gSession);
-    RemoveInstructionBreaks();
 
     TailpatchType newTailpatch;
 
@@ -543,7 +542,9 @@ void EmPatchMgr::SetupForTailpatch(TailpatchProc tp, const SystemCallContext& co
 
     gInstalledTailpatches.push_back(newTailpatch);
 
-    InstallInstructionBreaks();
+    // Only the new entry needs a break (fNextPC is unique among the entries, see above).
+    // Removing and re-adding every break here was a hot spot on the ESP32.
+    MetaMemory::MarkInstructionBreak(context.fNextPC);
 }
 
 /***********************************************************************
@@ -576,11 +577,11 @@ TailpatchProc EmPatchMgr::RecoverFromTailpatch(emuptr startPC) {
 
             if (--(iter->fCount) == 0) {
                 EmAssert(gSession);
-                RemoveInstructionBreaks();
+
+                // fNextPC is unique among the entries, so only this break goes away.
+                MetaMemory::UnmarkInstructionBreak(patchPC);
 
                 gInstalledTailpatches.erase(iter);
-
-                InstallInstructionBreaks();
             }
 
             return result;

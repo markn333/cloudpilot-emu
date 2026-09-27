@@ -72,6 +72,9 @@ class EmRegsEZ : public EmRegs, public EmHALHandler {
 
     virtual uint32 CyclesToNextInterrupt(uint64 systemCycles);
     void Cycle(uint64 systemCycles, Bool sleeping);
+    void SyncSystemCycles();
+    void PublishNextCycleEvent();
+    void UpdateTimerImpl();
 
     virtual void SetUARTSync(bool sync);
 

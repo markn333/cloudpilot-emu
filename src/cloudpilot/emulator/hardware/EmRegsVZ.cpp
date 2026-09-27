@@ -1701,6 +1701,7 @@ void EmRegsVZ::ApplySdctl() {
     uint16 sdctl = READ_REGISTER(sdramControl);
 
     gRAMBank_Mask = 0x003fffff;
+    gEmMemFetchBase = 1;  // the instruction fetch cache does not know about the new mask
 
     if ((sdctl & 0x0c) == 0x08) gRAMBank_Mask |= 0x00800000;
     if ((sdctl & 0x30) == 0x10) gRAMBank_Mask |= 0x00400000;

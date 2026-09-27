@@ -336,7 +336,10 @@ uint8* MemoryStick::GetDataOut() { return bufferOut; }
 uint32 MemoryStick::GetDataOutSize() { return bufferOutSize; }
 
 void MemoryStick::Mount(CardImage* cardImage) {
-    EmAssert(determineLayout(cardImage->BlocksTotal(), pagesPerBlock, segments));
+    // Keep the call outside EmAssert: with NDEBUG the assertion (and the layout setup) would vanish.
+    const bool layoutOk = determineLayout(cardImage->BlocksTotal(), pagesPerBlock, segments);
+    EmAssert(layoutOk);
+    (void)layoutOk;
     Reset();
 
     this->cardImage = cardImage;

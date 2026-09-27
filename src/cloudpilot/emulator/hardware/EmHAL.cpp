@@ -44,6 +44,8 @@ EmEvent<double, double> EmHAL::onPwmChange{};
 EmEvent<> EmHAL::onDayRollover{};
 
 vector<EmHAL::CycleConsumer> EmHAL::cycleConsumers;
+uint64 EmHAL::gCycleNow = 0;
+uint64 EmHAL::gNextCycleEvent = 0;
 
 // ---------------------------------------------------------------------------
 //		� EmHAL::AddHandler
@@ -448,6 +450,7 @@ void EmHAL::AddCycleConsumer(CycleHandler handler, void* context) {
     }
 
     cycleConsumers.push_back({handler, context});
+    gNextCycleEvent = 0;
 }
 
 void EmHAL::RemoveCycleConsumer(CycleHandler handler, void* context) {
@@ -460,11 +463,14 @@ void EmHAL::RemoveCycleConsumer(CycleHandler handler, void* context) {
         }
 
     if (j < cycleConsumers.size()) cycleConsumers.resize(j);
+    gNextCycleEvent = 0;
 }
 
 void EmHAL::DispatchCycle(uint64 cycles, bool sleeping) {
     for (auto consumer : cycleConsumers) consumer.handler(consumer.context, cycles, sleeping);
 }
+
+size_t EmHAL::CycleConsumerCount() { return cycleConsumers.size(); }
 
 bool EmHAL::SupportsImageInSlot(Slot slot, uint32 blocksTotal) {
     EmAssert(EmHAL::GetRootHandler());

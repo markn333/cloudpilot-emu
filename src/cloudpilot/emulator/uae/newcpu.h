@@ -92,8 +92,8 @@ extern regstruct lastint_regs;
 #define m68k_areg(r,num) (((r).regs + 8)[(num)])
 
 #define get_ibyte(o) get_byte(regs.pc + (o) + 1)
-#define get_iword(o) get_word(regs.pc + (o))
-#define get_ilong(o) get_long(regs.pc + (o))
+#define get_iword(o) EmMemFetch16(regs.pc + (o))
+#define get_ilong(o) EmMemFetch32(regs.pc + (o))
 
 #define m68k_incpc(o) (regs.pc += (o))
 

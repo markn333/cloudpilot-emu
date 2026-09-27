@@ -469,6 +469,7 @@ void EmRegsEZ::Initialize(void) {
 
     systemCycles = gSession->GetSystemCycles();
     lastProcessedSystemCycles = systemCycles;
+    EmHAL::gCycleNow = systemCycles;
 
     UpdateTimer();
     powerOffCached = GetAsleep();
@@ -483,6 +484,7 @@ void EmRegsEZ::Reset(Bool hardwareReset) {
     UnmarkScreen();
 
     if (hardwareReset) {
+        SyncSystemCycles();
         lastProcessedSystemCycles = systemCycles;
 
         f68EZ328Regs = kInitial68EZ328RegisterValues;
@@ -550,8 +552,12 @@ void EmRegsEZ::Load(SavestateLoader<ChunkType>& savestate) {
     afterLoad = true;
 
     systemCycles = gSession->GetSystemCycles();
+    EmHAL::gCycleNow = systemCycles;
     UpdateTimer();
     powerOffCached = GetAsleep();
+
+    // Make sure Cycle() runs right away to handle afterLoad.
+    EmHAL::gNextCycleEvent = 0;
 }
 
 template <typename T>
@@ -794,6 +800,23 @@ void EmRegsEZ::Cycle(uint64 systemCycles, Bool sleeping) {
 
     this->systemCycles = systemCycles;
     if (unlikely(systemCycles >= nextTimerEventAfterCycle)) UpdateTimer();
+
+    PublishNextCycleEvent();
+}
+
+// The CPU loop only calls Cycle() when an event is due, so this->systemCycles can lag behind.
+// Bring it up to the cycle count of the last executed instruction before using it.
+void EmRegsEZ::SyncSystemCycles() {
+    // Same value the original per-instruction Cycle() would have stored (it returned early
+    // while powered off, leaving systemCycles alone).
+    if (!powerOffCached) systemCycles = EmHAL::gCycleNow;
+}
+
+void EmRegsEZ::PublishNextCycleEvent() {
+    // Only take the fast path if we are the only cycle consumer (the UART adds one in sync mode).
+    // While afterLoad is pending, keep dispatching so that Cycle() handles it right away.
+    EmHAL::gNextCycleEvent =
+        (EmHAL::CycleConsumerCount() == 1 && !afterLoad) ? nextTimerEventAfterCycle : 0;
 }
 
 void EmRegsEZ::SetUARTSync(bool sync) {
@@ -2549,6 +2572,12 @@ uint32 EmRegsEZ::CyclesToNextInterrupt(uint64 systemCycles) {
 }
 
 void EmRegsEZ::UpdateTimer() {
+    SyncSystemCycles();
+    UpdateTimerImpl();
+    PublishNextCycleEvent();
+}
+
+void EmRegsEZ::UpdateTimerImpl() {
     nextTimerEventAfterCycle = ~0;
     if (GetAsleep()) return;
 

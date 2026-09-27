@@ -14,7 +14,8 @@
 #ifndef _METAMEMORY_H_
 #define _METAMEMORY_H_
 
-#include <set>
+#include <algorithm>
+#include <vector>
 
 #include "EmMemory.h"  // EmMemGetMetaAddress
 
@@ -42,7 +43,14 @@ class MetaMemory {
     static void UnmarkRange(emuptr start, emuptr end, uint8 v);
     static void MarkUnmarkRange(emuptr start, emuptr end, uint8 andValue, uint8 orValue);
 
-    static std::set<emuptr> breakpoints;
+    // A plain vector (unique entries) instead of std::set: tailpatches add and remove
+    // breakpoints on nearly every system call, and the set allocated a node each time.
+    static std::vector<emuptr> breakpoints;
+
+    // 1024-bit filter over (address >> 1) & 1023: IsCPUBreak only searches the set
+    // when the address's bit is set (the set is almost never hit).
+    static uint32 breakpointFilter[32];
+    static void RebuildBreakpointFilter();
 
     enum {
         kNoAppAccess = 0x0001,
@@ -140,7 +148,10 @@ inline Bool MetaMemory::IsScreenBuffer32(uint8* metaAddress) {
 }
 
 inline Bool MetaMemory::IsCPUBreak(emuptr opcodeLocation) {
-    return breakpoints.find(opcodeLocation) != breakpoints.end();
+    const uint32 bit = (opcodeLocation >> 1) & 1023;
+    if (likely((breakpointFilter[bit >> 5] & (1u << (bit & 31))) == 0)) return false;
+
+    return std::find(breakpoints.begin(), breakpoints.end(), opcodeLocation) != breakpoints.end();
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +177,11 @@ inline void MetaMemory::UnmarkScreen(emuptr begin, emuptr end) {
 // ---------------------------------------------------------------------------
 
 inline void MetaMemory::MarkInstructionBreak(emuptr opcodeLocation) {
-    breakpoints.insert(opcodeLocation);
+    if (std::find(breakpoints.begin(), breakpoints.end(), opcodeLocation) == breakpoints.end())
+        breakpoints.push_back(opcodeLocation);
+
+    const uint32 bit = (opcodeLocation >> 1) & 1023;
+    breakpointFilter[bit >> 5] |= 1u << (bit & 31);
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +189,12 @@ inline void MetaMemory::MarkInstructionBreak(emuptr opcodeLocation) {
 // ---------------------------------------------------------------------------
 
 inline void MetaMemory::UnmarkInstructionBreak(emuptr opcodeLocation) {
-    breakpoints.erase(opcodeLocation);
+    auto iter = std::find(breakpoints.begin(), breakpoints.end(), opcodeLocation);
+    if (iter == breakpoints.end()) return;
+
+    *iter = breakpoints.back();
+    breakpoints.pop_back();
+    RebuildBreakpointFilter();
 }
 
 #endif  // _METAMEMORY_H_

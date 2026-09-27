@@ -122,8 +122,12 @@ EmCPU68K* gCPU68K;
                                                                                          \
         EmAssert(session);                                                               \
         if (!session->IsNested()) {                                                      \
-            /* Perform CPU-specific idling. */                                           \
-            EmHAL::DispatchCycle(session->GetSystemCycles() + fCurrentCycles, sleeping); \
+            /* Perform CPU-specific idling. Only dispatch when a consumer has an */      \
+            /* event due (EmHAL::gNextCycleEvent), or always while sleeping. */          \
+            const uint64 cycleNow = session->GetSystemCycles() + fCurrentCycles;         \
+            EmHAL::gCycleNow = cycleNow;                                                 \
+            if (sleeping || unlikely(cycleNow >= EmHAL::gNextCycleEvent))                \
+                EmHAL::DispatchCycle(cycleNow, sleeping);                                \
                                                                                          \
             /* Perform expensive operations. */                                          \
                                                                                          \
@@ -420,7 +424,7 @@ uint32 EmCPU68K::Execute(uint32 maxCycles) {
 
         EmOpcode68K opcode;
 
-        opcode = EmMemGet16(pc);
+        opcode = EmMemFetch16(pc);
 #ifdef TRACE_FUNCTION_CALLS
         traceFunctionCalls(opcode, pc);
 #endif

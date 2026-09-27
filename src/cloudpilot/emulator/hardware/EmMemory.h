@@ -265,6 +265,32 @@ STATIC_INLINE void EmMemDoPut8(void* a, uint8 v) {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+//		EmMemFetch16 / EmMemFetch32
+// ---------------------------------------------------------------------------
+// Instruction fetch (opcode and extension words) with a one-entry cache of the
+// host address of the current 64KB bank. Only plain ROM / RAM banks are cached
+// (see EmMemFetch16Slow); everything else, odd addresses included, takes the
+// normal bank dispatch. The cache is invalidated whenever the bank table
+// changes (Memory::InitializeBanks).
+
+extern emuptr gEmMemFetchBase;  // bank base address; 1 = invalid
+extern uint8* gEmMemFetchHost;  // host address of gEmMemFetchBase
+
+uint16 EmMemFetch16Slow(emuptr addr);
+
+STATIC_INLINE uint16 EmMemFetch16(emuptr addr) {
+#ifndef ENABLE_DEBUGGER
+    if (((addr ^ gEmMemFetchBase) & 0xFFFF0001) == 0)
+        return EmMemDoGet16(gEmMemFetchHost + (addr & 0xFFFF));
+#endif
+    return EmMemFetch16Slow(addr);
+}
+
+STATIC_INLINE uint32 EmMemFetch32(emuptr addr) {
+    return ((uint32)EmMemFetch16(addr) << 16) | EmMemFetch16(addr + 2);
+}
+
 #ifdef __cplusplus
 }
 #endif

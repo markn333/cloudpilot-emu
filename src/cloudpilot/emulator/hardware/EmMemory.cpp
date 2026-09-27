@@ -377,6 +377,7 @@ void Memory::Load(SavestateLoader<ChunkType>& loader) {
  ***********************************************************************/
 
 void Memory::Dispose(void) {
+    gEmMemFetchBase = 1;  // invalidate the instruction fetch cache
     EmBankDummy::Dispose();
     EmBankRegs::Dispose();
     EmBankSRAM::Dispose();
@@ -390,8 +391,29 @@ void Memory::Dispose(void) {
 // ---------------------------------------------------------------------------
 // Initializes the specified memory banks with the given data.
 
+emuptr gEmMemFetchBase = 1;
+uint8* gEmMemFetchHost = nullptr;
+
+uint16 EmMemFetch16Slow(emuptr addr) {
+    const uint16 value = EmMemGet16(addr);
+
+    // Cache the bank if reading from it is a plain memory access: the ROM and RAM banks
+    // read from xlateaddr(addr) (their masks are the region size - 1, so a 64KB bank is
+    // contiguous on the host side).
+    EmAddressBank* bank = EmMemGetBankPtr(addr);
+    if ((addr & 1) == 0 && bank->xlateaddr != nullptr &&
+        (bank->wget == EmBankROM::GetWord || bank->wget == EmBankSRAM::GetWord ||
+         bank->wget == EmBankDRAM::GetWord)) {
+        gEmMemFetchBase = addr & 0xFFFF0000;
+        gEmMemFetchHost = bank->xlateaddr(gEmMemFetchBase);
+    }
+
+    return value;
+}
+
 void Memory::InitializeBanks(EmAddressBank& iBankInitializer, int32 iStartingBankIndex,
                              int32 iNumberOfBanks) {
+    gEmMemFetchBase = 1;  // invalidate the instruction fetch cache
     for (int32 aBankIndex = iStartingBankIndex; aBankIndex < iStartingBankIndex + iNumberOfBanks;
          aBankIndex++) {
         gEmMemBanks[aBankIndex] = &iBankInitializer;
