@@ -20,6 +20,10 @@
     #else
         #define EM_THREADS 0
     #endif
+#elif defined(ESP_PLATFORM)
+    // PalmCYD: events are queued and consumed by the emulator task only, so the queues need no
+    // mutex (locking them cost several thousand mutex operations per second).
+    #define EM_THREADS 0
 #else
     #define EM_THREADS 1
 #endif

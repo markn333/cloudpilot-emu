@@ -18,7 +18,7 @@
 
 #include "EmCommon.h"
 
-#ifdef EM_THREADS
+#if EM_THREADS
     #include <mutex>
 #endif
 
@@ -41,7 +41,7 @@ class EmThreadSafeQueue {
     deque<T> fContainer;
     const int fMaxSize;
 
-#ifdef EM_THREADS
+#if EM_THREADS
     mutex fMutex;
 #endif
 };

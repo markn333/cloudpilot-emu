@@ -18,7 +18,7 @@
 #include "KeyboardEvent.h"
 #include "PenEvent.h"
 
-#ifdef EM_THREADS
+#if EM_THREADS
     #define LOCK() unique_lock<mutex> lock(fMutex);
 #else
     #define LOCK()
