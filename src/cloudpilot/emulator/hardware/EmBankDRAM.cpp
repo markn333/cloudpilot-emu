@@ -266,6 +266,8 @@ void EmBankDRAM::SetByte(emuptr address, uint32 value) {
         gSystemState.MarkScreenDirty(address, address);
 }
 
+uint32 EmBankDRAM::GetDynamicHeapSize(void) { return dynamicHeapSize; }
+
 uint32 EmBankDRAM::GetDummy(emuptr address) { return 0; }
 
 void EmBankDRAM::SetDummy(emuptr address, uint32 value) {}

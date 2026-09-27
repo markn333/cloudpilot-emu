@@ -546,6 +546,7 @@ void EmRegsEZ::Load(SavestateLoader<ChunkType>& savestate) {
     EmRegsEZ::UARTStateChanged(sendTxData);
 
     gMemAccessFlags.fProtect_SRAMSet = (READ_REGISTER(csDSelect) & 0x2000) != 0;
+    EmMemInvalidateCaches();  // the RAM write cache depends on SRAM write protection
     markScreenScheduled = true;
     screenMarked = false;
 
@@ -1516,6 +1517,7 @@ void EmRegsEZ::csDSelectWrite(emuptr address, int size, uint32 value) {
     // Check its new state and update our ram-protect flag.
 
     gMemAccessFlags.fProtect_SRAMSet = (READ_REGISTER(csDSelect) & 0x2000) != 0;
+    EmMemInvalidateCaches();  // the RAM write cache depends on SRAM write protection
 
     // Check to see if the unprotected memory range changed.
 

@@ -36,6 +36,9 @@ class EmBankDRAM {
     static uint8* GetMetaAddress(emuptr address);
     static void AddOpcodeCycles(void);
 
+    // Addresses above this go to EmBankSRAM (see SetLong).
+    static uint32 GetDynamicHeapSize(void);
+
    private:
     static void AddressError(emuptr address, long size, Bool forRead);
     static void InvalidAccess(emuptr address, long size, Bool forRead);

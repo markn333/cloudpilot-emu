@@ -100,6 +100,66 @@ extern EmAddressBank** gDynEmMemBanksP;
 #define EmMemCallGetFunc(func, addr) ((*EmMemGetBank(addr).func)(addr))
 #define EmMemCallPutFunc(func, addr, v) ((*EmMemGetBank(addr).func)(addr, v))
 
+// Data read cache: like the instruction fetch cache below (EmMemFetch16), but with 256
+// direct-mapped entries (indexed by bits 16-23 of the address) so that ROM and RAM reads
+// do not evict each other. Each entry holds the host address of a 64KB ROM / RAM bank.
+// Only even-aligned words / longs that stay within the bank take the fast path; everything
+// else goes through the bank handlers. Invalidated together with the fetch cache
+// (EmMemInvalidateCaches).
+
+typedef struct EmMemReadCacheEntry {
+    emuptr base;  // bank base address (see EmMemInvalidateCaches for invalid entries)
+    uint8* host;  // host address of base
+} EmMemReadCacheEntry;
+
+extern EmMemReadCacheEntry gEmMemReadCache[256];
+
+#define EmMemReadCacheEntryFor(addr) (&gEmMemReadCache[((addr) >> 16) & 0xFF])
+
+// Data write cache for the RAM banks (EmBankDRAM / EmBankSRAM), same layout as the read
+// cache. A hit does exactly what the bank's Set functions do for an aligned write that is
+// not write protected: store, mark the RAM page dirty, and report writes to meta memory
+// marked as screen buffer (EmMemScreenWritten). Only filled while SRAM write protection is
+// off; EmMemInvalidateCaches() must be called when that changes.
+
+typedef struct EmMemWriteCacheEntry {
+    emuptr base;   // bank base address (see EmMemInvalidateCaches for invalid entries)
+    uint8* host;   // host address of base
+    uint8* meta;   // meta memory address of base
+    emuptr phy;    // offset of base in the RAM region (for the dirty page bitmap)
+} EmMemWriteCacheEntry;
+
+extern EmMemWriteCacheEntry gEmMemWriteCache[256];
+extern uint8* gEmMemRamDirtyPages;
+
+#define EmMemWriteCacheEntryFor(addr) (&gEmMemWriteCache[((addr) >> 16) & 0xFF])
+
+void EmMemPut32Slow(emuptr addr, uint32 l);
+void EmMemPut16Slow(emuptr addr, uint16 w);
+void EmMemPut8Slow(emuptr addr, uint8 b);
+void EmMemScreenWritten(emuptr addressLo, emuptr addressHi);
+
+STATIC_INLINE void EmMemDoPut32(void* a, uint32 v);
+STATIC_INLINE void EmMemDoPut16(void* a, uint16 v);
+STATIC_INLINE void EmMemDoPut8(void* a, uint8 v);
+
+// Same as markDirty() in EmBankDRAM.cpp / EmBankSRAM.cpp.
+#define EmMemMarkRamDirty(phy)     (gEmMemRamDirtyPages[(phy) >> 13] |= (uint8)(1 << (((phy) >> 10) & 0x07)))
+
+// MetaMemory::kScreenBuffer in every byte (see MetaMemory.h).
+#define EmMemScreenBits8 0x20
+#define EmMemScreenBits16 0x2020
+
+void EmMemInvalidateCaches(void);
+
+uint32 EmMemGet32Slow(emuptr addr);
+uint16 EmMemGet16Slow(emuptr addr);
+uint8 EmMemGet8Slow(emuptr addr);
+
+STATIC_INLINE uint32 EmMemDoGet32(void* a);
+STATIC_INLINE uint16 EmMemDoGet16(void* a);
+STATIC_INLINE uint8 EmMemDoGet8(void* a);
+
 // ---------------------------------------------------------------------------
 //		� EmMemGet32
 // ---------------------------------------------------------------------------
@@ -107,9 +167,15 @@ extern EmAddressBank** gDynEmMemBanksP;
 STATIC_INLINE uint32 EmMemGet32(emuptr addr) {
 #ifdef ENABLE_DEBUGGER
     DbgNotifyRead32(addr);
-#endif
 
     return EmMemCallGetFunc(lget, addr);
+#else
+    const EmMemReadCacheEntry* entry = EmMemReadCacheEntryFor(addr);
+    if (((addr ^ entry->base) & 0xFFFF0001) == 0 && (addr & 0xFFFF) <= 0xFFFC)
+        return EmMemDoGet32(entry->host + (addr & 0xFFFF));
+
+    return EmMemGet32Slow(addr);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -119,9 +185,15 @@ STATIC_INLINE uint32 EmMemGet32(emuptr addr) {
 STATIC_INLINE uint16 EmMemGet16(emuptr addr) {
 #ifdef ENABLE_DEBUGGER
     DbgNotifyRead16(addr);
-#endif
 
     return EmMemCallGetFunc(wget, addr);
+#else
+    const EmMemReadCacheEntry* entry = EmMemReadCacheEntryFor(addr);
+    if (((addr ^ entry->base) & 0xFFFF0001) == 0)
+        return EmMemDoGet16(entry->host + (addr & 0xFFFF));
+
+    return EmMemGet16Slow(addr);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -131,9 +203,15 @@ STATIC_INLINE uint16 EmMemGet16(emuptr addr) {
 STATIC_INLINE uint8 EmMemGet8(emuptr addr) {
 #ifdef ENABLE_DEBUGGER
     DbgNotifyRead8(addr);
-#endif
 
     return EmMemCallGetFunc(bget, addr);
+#else
+    const EmMemReadCacheEntry* entry = EmMemReadCacheEntryFor(addr);
+    if (((addr ^ entry->base) & 0xFFFF0000) == 0)
+        return EmMemDoGet8(entry->host + (addr & 0xFFFF));
+
+    return EmMemGet8Slow(addr);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -143,9 +221,25 @@ STATIC_INLINE uint8 EmMemGet8(emuptr addr) {
 STATIC_INLINE void EmMemPut32(emuptr addr, uint32 l) {
 #ifdef ENABLE_DEBUGGER
     DbgNotifyWrite32(addr);
-#endif
 
     EmMemCallPutFunc(lput, addr, l);
+#else
+    const EmMemWriteCacheEntry* entry = EmMemWriteCacheEntryFor(addr);
+    if (((addr ^ entry->base) & 0xFFFF0001) == 0 && (addr & 0xFFFF) <= 0xFFFC) {
+        const emuptr offset = addr & 0xFFFF;
+        const emuptr phy = entry->phy + offset;
+        const uint16* meta = (const uint16*)(entry->meta + offset);
+
+        EmMemDoPut32(entry->host + offset, l);
+        EmMemMarkRamDirty(phy);
+        EmMemMarkRamDirty(phy + 2);
+        if (((meta[0] | meta[1]) & EmMemScreenBits16) != 0) EmMemScreenWritten(addr, addr + 4);
+
+        return;
+    }
+
+    EmMemPut32Slow(addr, l);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -155,9 +249,24 @@ STATIC_INLINE void EmMemPut32(emuptr addr, uint32 l) {
 STATIC_INLINE void EmMemPut16(emuptr addr, uint16 w) {
 #ifdef ENABLE_DEBUGGER
     DbgNotifyWrite16(addr);
-#endif
 
     EmMemCallPutFunc(wput, addr, w);
+#else
+    const EmMemWriteCacheEntry* entry = EmMemWriteCacheEntryFor(addr);
+    if (((addr ^ entry->base) & 0xFFFF0001) == 0) {
+        const emuptr offset = addr & 0xFFFF;
+        const emuptr phy = entry->phy + offset;
+
+        EmMemDoPut16(entry->host + offset, w);
+        EmMemMarkRamDirty(phy);
+        if ((*(const uint16*)(entry->meta + offset) & EmMemScreenBits16) != 0)
+            EmMemScreenWritten(addr, addr + 2);
+
+        return;
+    }
+
+    EmMemPut16Slow(addr, w);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -167,9 +276,23 @@ STATIC_INLINE void EmMemPut16(emuptr addr, uint16 w) {
 STATIC_INLINE void EmMemPut8(emuptr addr, uint8 b) {
 #ifdef ENABLE_DEBUGGER
     DbgNotifyWrite8(addr);
-#endif
 
     EmMemCallPutFunc(bput, addr, b);
+#else
+    const EmMemWriteCacheEntry* entry = EmMemWriteCacheEntryFor(addr);
+    if (((addr ^ entry->base) & 0xFFFF0000) == 0) {
+        const emuptr offset = addr & 0xFFFF;
+        const emuptr phy = entry->phy + offset;
+
+        EmMemDoPut8(entry->host + offset, b);
+        EmMemMarkRamDirty(phy);
+        if ((entry->meta[offset] & EmMemScreenBits8) != 0) EmMemScreenWritten(addr, addr);
+
+        return;
+    }
+
+    EmMemPut8Slow(addr, b);
+#endif
 }
 
 // ---------------------------------------------------------------------------

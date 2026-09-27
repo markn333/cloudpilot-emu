@@ -121,7 +121,7 @@ EmCPU68K* gCPU68K;
         /* need interrupts firing or tmr counters incrementing. */                       \
                                                                                          \
         EmAssert(session);                                                               \
-        if (!session->IsNested()) {                                                      \
+        if (!isNested) {                                                                 \
             /* Perform CPU-specific idling. Only dispatch when a consumer has an */      \
             /* event due (EmHAL::gNextCycleEvent), or always while sleeping. */          \
             const uint64 cycleNow = session->GetSystemCycles() + fCurrentCycles;         \
@@ -369,6 +369,10 @@ uint32 EmCPU68K::Execute(uint32 maxCycles) {
     // Do not run cycleSlowly on each call if single stepping
     int counter = maxCycles ? 0 : 1;
 
+    // The nesting level cannot change while this frame runs (subroutine calls restore it),
+    // so read it once instead of on every instruction (see CYCLE).
+    const bool isNested = fSession->IsNested();
+
     uint32 cycles;
 
 #define pc (regs.pc)
@@ -540,6 +544,10 @@ Bool EmCPU68K::ExecuteStoppedLoop(uint32 maxCycles) {
 
     // Do not run cycleSlowly on each call if single stepping
     int counter = maxCycles ? 0 : 1;
+
+    // The nesting level cannot change while this frame runs (subroutine calls restore it),
+    // so read it once instead of on every instruction (see CYCLE).
+    const bool isNested = fSession->IsNested();
 
     // While the CPU is stopped (because a STOP instruction was
     // executed) do some idle tasks.

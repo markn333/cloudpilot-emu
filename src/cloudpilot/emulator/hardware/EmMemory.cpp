@@ -24,6 +24,7 @@
 #include "EmCommon.h"
 #include "EmDevice.h"
 #include "EmSession.h"  // gSession, GetDevice
+#include "EmSystemState.h"  // gSystemState (EmMemScreenWritten)
 #include "MemoryRegion.h"
 #include "MetaMemory.h"  // MetaMemory::Initialize
 #include "savestate/Savestate.h"
@@ -377,7 +378,7 @@ void Memory::Load(SavestateLoader<ChunkType>& loader) {
  ***********************************************************************/
 
 void Memory::Dispose(void) {
-    gEmMemFetchBase = 1;  // invalidate the instruction fetch cache
+    EmMemInvalidateCaches();
     EmBankDummy::Dispose();
     EmBankRegs::Dispose();
     EmBankSRAM::Dispose();
@@ -393,27 +394,174 @@ void Memory::Dispose(void) {
 
 emuptr gEmMemFetchBase = 1;
 uint8* gEmMemFetchHost = nullptr;
+EmMemReadCacheEntry gEmMemReadCache[256];
+EmMemWriteCacheEntry gEmMemWriteCache[256];
+uint8* gEmMemRamDirtyPages = nullptr;
+
+namespace {
+    // Set when a write cache entry relies on SRAM write protection being off.
+    bool writeCacheDependsOnProtection = false;
+}
+
+void EmMemInvalidateCaches(void) {
+    gEmMemFetchBase = 1;
+    writeCacheDependsOnProtection = false;
+
+    // An invalid entry must never match: entry i is only looked up for addresses whose
+    // bits 16-23 equal i, so give it a base with different bits 16-23 (the byte path does
+    // not look at bit 0).
+    for (uint32 i = 0; i < 256; i++) {
+        gEmMemReadCache[i].base = (((i ^ 1) & 0xFF) << 16) | 1;
+        gEmMemReadCache[i].host = nullptr;
+
+        gEmMemWriteCache[i].base = (((i ^ 1) & 0xFF) << 16) | 1;
+        gEmMemWriteCache[i].host = nullptr;
+        gEmMemWriteCache[i].meta = nullptr;
+        gEmMemWriteCache[i].phy = 0;
+    }
+}
+
+void EmMemScreenWritten(emuptr addressLo, emuptr addressHi) {
+    gSystemState.MarkScreenDirty(addressLo, addressHi);
+}
+
+namespace {
+    // A zero-initialized entry would look valid for bank 0 (with a null host pointer).
+    struct InvalidateCachesAtStartup {
+        InvalidateCachesAtStartup() { EmMemInvalidateCaches(); }
+    } invalidateCachesAtStartup;
+}  // namespace
+
+namespace {
+    // The RAM handlers mask addresses with gRAMBank_Mask, while xlateaddr / xlatemetaaddr use
+    // the region size - 1. They only agree while the mask is not narrowed (EmRegsVZ::ApplySdctl
+    // narrows it during the m515 memory size probe), so RAM banks are not cached otherwise.
+    bool RamMaskIsRegionSize() {
+        return gRAMBank_Mask == EmMemory::GetRegionSize(MemoryRegion::ram) - 1;
+    }
+
+    // Reading from the ROM and RAM banks is a plain memory access at xlateaddr(addr) (their
+    // masks are the region size - 1, so a 64KB bank is contiguous on the host side). Returns
+    // the host address of the bank containing addr, or nullptr if the bank is not cacheable.
+    uint8* CacheableBankHost(emuptr addr) {
+        EmAddressBank* bank = EmMemGetBankPtr(addr);
+
+        if (bank->xlateaddr == nullptr) return nullptr;
+        if (bank->wget != EmBankROM::GetWord && bank->wget != EmBankSRAM::GetWord &&
+            bank->wget != EmBankDRAM::GetWord)
+            return nullptr;
+        if (bank->wget != EmBankROM::GetWord && !RamMaskIsRegionSize()) return nullptr;
+
+        return bank->xlateaddr(addr & 0xFFFF0000);
+    }
+
+    void FillReadCache(emuptr addr) {
+        uint8* host = CacheableBankHost(addr);
+        if (host == nullptr) return;
+
+        EmMemReadCacheEntry* entry = EmMemReadCacheEntryFor(addr);
+        entry->base = addr & 0xFFFF0000;
+        entry->host = host;
+    }
+}  // namespace
 
 uint16 EmMemFetch16Slow(emuptr addr) {
-    const uint16 value = EmMemGet16(addr);
+#ifdef ENABLE_DEBUGGER
+    const uint16 value = EmMemGet16(addr);  // keeps the debugger's read notification
+#else
+    const uint16 value = EmMemCallGetFunc(wget, addr);
+#endif
 
-    // Cache the bank if reading from it is a plain memory access: the ROM and RAM banks
-    // read from xlateaddr(addr) (their masks are the region size - 1, so a 64KB bank is
-    // contiguous on the host side).
-    EmAddressBank* bank = EmMemGetBankPtr(addr);
-    if ((addr & 1) == 0 && bank->xlateaddr != nullptr &&
-        (bank->wget == EmBankROM::GetWord || bank->wget == EmBankSRAM::GetWord ||
-         bank->wget == EmBankDRAM::GetWord)) {
-        gEmMemFetchBase = addr & 0xFFFF0000;
-        gEmMemFetchHost = bank->xlateaddr(gEmMemFetchBase);
+    if ((addr & 1) == 0) {
+        uint8* host = CacheableBankHost(addr);
+        if (host != nullptr) {
+            gEmMemFetchBase = addr & 0xFFFF0000;
+            gEmMemFetchHost = host;
+        }
     }
 
     return value;
 }
 
+uint32 EmMemGet32Slow(emuptr addr) {
+    const uint32 value = EmMemCallGetFunc(lget, addr);
+    FillReadCache(addr);
+
+    return value;
+}
+
+uint16 EmMemGet16Slow(emuptr addr) {
+    const uint16 value = EmMemCallGetFunc(wget, addr);
+    FillReadCache(addr);
+
+    return value;
+}
+
+uint8 EmMemGet8Slow(emuptr addr) {
+    const uint8 value = EmMemCallGetFunc(bget, addr);
+    FillReadCache(addr);
+
+    return value;
+}
+
+namespace {
+    // A RAM bank can use the write cache if its Set functions are the plain DRAM / SRAM ones
+    // and SRAM write protection is off (then both only store, mark the page dirty and check
+    // the screen bits in meta memory, see EmBankDRAM::SetLong / EmBankSRAM::SetLong).
+    void FillWriteCache(emuptr addr) {
+        const emuptr base = addr & 0xFFFF0000;
+
+        EmAddressBank* bank = EmMemGetBankPtr(addr);
+        if (bank->lput != EmBankDRAM::SetLong && bank->lput != EmBankSRAM::SetLong) return;
+        if (bank->xlateaddr == nullptr || bank->xlatemetaaddr == nullptr) return;
+        if (!RamMaskIsRegionSize()) return;
+
+        // DRAM below the end of the dynamic heap is never write protected; everything else
+        // ends up in EmBankSRAM, which checks the protection.
+        const bool dependsOnProtection =
+            !(bank->lput == EmBankDRAM::SetLong && base + 0xFFFF <= EmBankDRAM::GetDynamicHeapSize());
+        if (dependsOnProtection && gMemAccessFlags.fProtect_SRAMSet) return;
+
+        uint8* ram = EmMemory::GetForRegion(MemoryRegion::ram);
+        uint8* dirtyPages = EmMemory::GetDirtyPagesForRegion(MemoryRegion::ram);
+        if (ram == nullptr || dirtyPages == nullptr) return;
+
+        uint8* host = bank->xlateaddr(base);
+        uint8* meta = bank->xlatemetaaddr(base);
+
+        // DRAM uses the unmasked address for meta memory and SRAM the masked one; both agree
+        // with the host offset for the banks we cache (the RAM region is at most 16MB and
+        // its mask is the region size - 1).
+        if (meta != gRAM_MetaMemory + (host - ram)) return;
+
+        EmMemWriteCacheEntry* entry = EmMemWriteCacheEntryFor(addr);
+        entry->base = base;
+        entry->host = host;
+        entry->meta = meta;
+        entry->phy = host - ram;
+        gEmMemRamDirtyPages = dirtyPages;
+        if (dependsOnProtection) writeCacheDependsOnProtection = true;
+    }
+}  // namespace
+
+void EmMemPut32Slow(emuptr addr, uint32 l) {
+    EmMemCallPutFunc(lput, addr, l);
+    FillWriteCache(addr);
+}
+
+void EmMemPut16Slow(emuptr addr, uint16 w) {
+    EmMemCallPutFunc(wput, addr, w);
+    FillWriteCache(addr);
+}
+
+void EmMemPut8Slow(emuptr addr, uint8 b) {
+    EmMemCallPutFunc(bput, addr, b);
+    FillWriteCache(addr);
+}
+
 void Memory::InitializeBanks(EmAddressBank& iBankInitializer, int32 iStartingBankIndex,
                              int32 iNumberOfBanks) {
-    gEmMemFetchBase = 1;  // invalidate the instruction fetch cache
+    EmMemInvalidateCaches();
     for (int32 aBankIndex = iStartingBankIndex; aBankIndex < iStartingBankIndex + iNumberOfBanks;
          aBankIndex++) {
         gEmMemBanks[aBankIndex] = &iBankInitializer;
@@ -584,6 +732,9 @@ CEnableFullAccess::CEnableFullAccess(void) : fOldMemAccessFlags(gMemAccessFlags)
 
 CEnableFullAccess::~CEnableFullAccess(void) {
     gMemAccessFlags = fOldMemAccessFlags;
+
+    // Protection may be back on: drop write cache entries that were filled without it.
+    if (gMemAccessFlags.fProtect_SRAMSet && writeCacheDependsOnProtection) EmMemInvalidateCaches();
 
     --fgAccessCount;
 }

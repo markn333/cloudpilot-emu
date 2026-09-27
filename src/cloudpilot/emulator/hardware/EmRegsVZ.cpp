@@ -634,6 +634,7 @@ void EmRegsVZ::Load(SavestateLoader<ChunkType>& loader) {
     EmRegsVZ::UARTStateChanged(sendTxData, 1);
 
     gMemAccessFlags.fProtect_SRAMSet = (READ_REGISTER(csDSelect) & 0x2000) != 0;
+    EmMemInvalidateCaches();  // the RAM write cache depends on SRAM write protection
 
     ApplySdctl();
 
@@ -1701,7 +1702,7 @@ void EmRegsVZ::ApplySdctl() {
     uint16 sdctl = READ_REGISTER(sdramControl);
 
     gRAMBank_Mask = 0x003fffff;
-    gEmMemFetchBase = 1;  // the instruction fetch cache does not know about the new mask
+    EmMemInvalidateCaches();  // the fetch / read caches do not know about the new mask
 
     if ((sdctl & 0x0c) == 0x08) gRAMBank_Mask |= 0x00800000;
     if ((sdctl & 0x30) == 0x10) gRAMBank_Mask |= 0x00400000;
@@ -1769,6 +1770,7 @@ void EmRegsVZ::csDSelectWrite(emuptr address, int size, uint32 value) {
     // Check its new state and update our ram-protect flag.
 
     gMemAccessFlags.fProtect_SRAMSet = (READ_REGISTER(csDSelect) & 0x2000) != 0;
+    EmMemInvalidateCaches();  // the RAM write cache depends on SRAM write protection
 
     // Check to see if the unprotected memory range changed.
 
