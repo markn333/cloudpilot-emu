@@ -19,6 +19,11 @@ namespace Platform {
 
     void GetDate(uint32& year, uint32& month, uint32& day);
 
+    // Called when Palm OS sets the time (TimSetSeconds). secondsSince1904 is Palm local time.
+    // Hosts whose clock is the emulator's time source (e.g. an embedded target without an RTC)
+    // can adjust their clock here; on desktop / web this is a no-op.
+    void SetPalmTime(uint32 secondsSince1904);
+
     uint32 Random();
 }  // namespace Platform
 

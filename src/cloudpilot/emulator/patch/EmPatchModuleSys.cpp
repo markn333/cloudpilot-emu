@@ -279,6 +279,21 @@ namespace {
         PRINTF("syscall: HwrMemReadable for 0x%08x", address);
     }
 
+    CallROMType HeadpatchTimSetSeconds(void) {
+        // void TimSetSeconds(UInt32 seconds)
+        //
+        // Let the host adjust its clock (the emulated RTC reads the host clock), then run the ROM
+        // routine as usual. Without this, time set in the Prefs panel is lost on the next RTC read.
+
+        CALLED_SETUP("void", "UInt32 seconds");
+
+        CALLED_GET_PARAM_VAL(UInt32, seconds);
+
+        Platform::SetPalmTime(seconds);
+
+        return kExecuteROM;
+    }
+
     void TailpatchTimInit(void) {
         // Turn off the RTC bug workaround flag.
 
@@ -424,6 +439,7 @@ namespace {
         {sysTrapFtrInit, NULL, TailpatchFtrInit},
         {sysTrapHwrMemReadable, NULL, TailpatchHwrMemReadable},
         {sysTrapTimInit, NULL, TailpatchTimInit},
+        {sysTrapTimSetSeconds, HeadpatchTimSetSeconds, NULL},
         {sysTrapUIInitialize, NULL, TailpatchUIInitialize},
         {sysTrapEvtSysEventAvail, NULL, TailpatchEvtSysEventAvail},
         {sysTrapHwrDockStatus, HeadpatchHwrDockStatus, NULL},
