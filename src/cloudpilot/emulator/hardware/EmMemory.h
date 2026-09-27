@@ -144,7 +144,8 @@ STATIC_INLINE void EmMemDoPut16(void* a, uint16 v);
 STATIC_INLINE void EmMemDoPut8(void* a, uint8 v);
 
 // Same as markDirty() in EmBankDRAM.cpp / EmBankSRAM.cpp.
-#define EmMemMarkRamDirty(phy)     (gEmMemRamDirtyPages[(phy) >> 13] |= (uint8)(1 << (((phy) >> 10) & 0x07)))
+#define EmMemMarkRamDirty(phy) \
+    (gEmMemRamDirtyPages[(phy) >> 13] |= (uint8)(1 << (((phy) >> 10) & 0x07)))
 
 // MetaMemory::kScreenBuffer in every byte (see MetaMemory.h).
 #define EmMemScreenBits8 0x20
