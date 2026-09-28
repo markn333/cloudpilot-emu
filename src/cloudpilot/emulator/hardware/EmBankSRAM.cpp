@@ -91,7 +91,15 @@ void EmBankSRAM::Initialize() {
     EmAssert(gRAM_MetaMemory == NULL);
 
     gRAMBank_Mask = ramSize - 1;
+#if defined(ESP_PLATFORM)
+    // PalmCYD: meta memory (only used for the screen bits) is allocated on the first
+    // MetaMemory::MarkScreen (see EmBankSRAM::EnsureMetaMemory). Devices with a dedicated
+    // framebuffer (Palm IIIc) never mark the screen and so never need it; until then
+    // gRAM_MetaMemory is null, which means "all zero".
+    gRAM_MetaMemory = nullptr;
+#else
     gRAM_MetaMemory = (uint8*)Platform::AllocateMemoryClear(ramSize);
+#endif
 
     EmAssert(gSession);
 
@@ -123,7 +131,29 @@ void EmBankSRAM::Initialize() {
  *
  ***********************************************************************/
 
-void EmBankSRAM::Reset(Bool /*hardwareReset*/) { memset(gRAM_MetaMemory, 0, ramSize); }
+void EmBankSRAM::Reset(Bool /*hardwareReset*/) {
+    if (gRAM_MetaMemory) memset(gRAM_MetaMemory, 0, ramSize);
+}
+
+// ---------------------------------------------------------------------------
+//		EmBankSRAM::EnsureMetaMemory
+// ---------------------------------------------------------------------------
+
+bool EmBankSRAM::EnsureMetaMemory(void) {
+    if (gRAM_MetaMemory) return true;
+
+    gRAM_MetaMemory = (uint8*)Platform::AllocateMemoryClear(ramSize);
+    if (!gRAM_MetaMemory) {
+        // Without meta memory the screen would silently stop updating (EmRegsEZ::MarkScreen
+        // does not retry), so fail loudly instead.
+        printf("EmBankSRAM: cannot allocate %u bytes of meta memory\n", (unsigned)ramSize);
+        abort();
+    }
+
+    // The RAM write cache points at a shared zero page while there is no meta memory.
+    EmMemInvalidateCaches();
+    return true;
+}
 
 /***********************************************************************
  *
@@ -240,7 +270,7 @@ void EmBankSRAM::SetLong(emuptr address, uint32 value) {
     markDirty(phyAddress);
     markDirty(phyAddress + 2);
 
-    if (MetaMemory::IsScreenBuffer32(InlineGetMetaAddress(phyAddress)))
+    if (gRAM_MetaMemory && MetaMemory::IsScreenBuffer32(InlineGetMetaAddress(phyAddress)))
         gSystemState.MarkScreenDirty(address, address + 4);
 }
 
@@ -270,7 +300,7 @@ void EmBankSRAM::SetWord(emuptr address, uint32 value) {
 
     markDirty(phyAddress);
 
-    if (MetaMemory::IsScreenBuffer16(InlineGetMetaAddress(phyAddress)))
+    if (gRAM_MetaMemory && MetaMemory::IsScreenBuffer16(InlineGetMetaAddress(phyAddress)))
         gSystemState.MarkScreenDirty(address, address + 2);
 }
 
@@ -293,7 +323,7 @@ void EmBankSRAM::SetByte(emuptr address, uint32 value) {
 
     markDirty(phyAddress);
 
-    if (MetaMemory::IsScreenBuffer8(InlineGetMetaAddress(phyAddress)))
+    if (gRAM_MetaMemory && MetaMemory::IsScreenBuffer8(InlineGetMetaAddress(phyAddress)))
         gSystemState.MarkScreenDirty(address, address);
 }
 

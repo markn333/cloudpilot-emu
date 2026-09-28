@@ -245,6 +245,83 @@ Bool EmRegsSED1375::GetLCDBacklightOn(void) {
 
 Bool EmRegsSED1375::GetLCDHasFrame(void) { return true; }
 
+#if defined(ESP_PLATFORM)
+
+namespace {
+    // PalmCYD: the ESP32 display takes RGB565, so deliver 16 bits per pixel (half the memory
+    // traffic of the 32-bit frame, and the host only copies lines).
+    template <int BPP>
+    void copyLines16(const uint16* clut, uint8* src, uint16* dst, uint32 lines, int32 width) {
+        Nibbler<BPP, true> nibbler;
+        nibbler.reset(src, 0);
+
+        for (uint32 y = 0; y < lines; y++)
+            for (int32 x = 0; x < width; x++) *(dst++) = clut[nibbler.nibble()];
+    }
+}  // namespace
+
+bool EmRegsSED1375::CopyLCDFrame(Frame& frame, bool fullRefresh) {
+    const int32 bpp = 1 << ((fRegs.mode1 & sed1375BPPMask) >> sed1375BPPShift);
+    const int32 width = (fRegs.horizontalPanelSize + 1) * 8;
+    const int32 height = ((fRegs.verticalPanelSizeMSB << 8) | fRegs.verticalPanelSizeLSB) + 1;
+    const uint32 offset = (fRegs.screen1StartAddressMSBit << 17) |
+                          (fRegs.screen1StartAddressMSB << 9) | (fRegs.screen1StartAddressLSB << 1);
+    const emuptr baseAddr = fBaseVideoAddr + offset;
+    const uint32 rowBytes = (bpp * width) / 8;
+
+    if (width != 160 || height != 160) return false;
+    if (bpp != 1 && bpp != 2 && bpp != 4 && bpp != 8) return false;
+
+    frame.bpp = 16;
+    frame.lineWidth = width;
+    frame.lines = height;
+    frame.margin = 0;
+    frame.bytesPerLine = width * 2;
+    frame.hasChanges = true;
+    frame.scaleX = frame.scaleY = 1;
+
+    if (2 * width * height > static_cast<ssize_t>(frame.GetBufferSize())) return false;
+
+    frame.UpdateDirtyLines(gSystemState, baseAddr, rowBytes, fullRefresh);
+    if (!frame.hasChanges) return true;
+
+    // Palette in RGB565 (fClutData is 0xFFBBGGRR with 8 bits per channel).
+    uint16 clut[256];
+    for (int32 i = 0; i < (1 << bpp); i++) {
+        const uint32 c = fClutData[i];
+        clut[i] = ((c & 0xF8) << 8) | ((c >> 5) & 0x7E0) | ((c >> 19) & 0x1F);
+    }
+
+    uint16* buffer =
+        reinterpret_cast<uint16*>(frame.GetBuffer() + frame.firstDirtyLine * frame.bytesPerLine);
+    uint8* src = framebuffer.GetRealAddress(baseAddr + frame.firstDirtyLine * rowBytes);
+    const uint32 lines = frame.lastDirtyLine - frame.firstDirtyLine + 1;
+
+    switch (bpp) {
+        case 1:
+            copyLines16<1>(clut, src, buffer, lines, width);
+            break;
+
+        case 2:
+            copyLines16<2>(clut, src, buffer, lines, width);
+            break;
+
+        case 4:
+            copyLines16<4>(clut, src, buffer, lines, width);
+            break;
+
+        case 8:
+            for (uint32 y = 0; y < lines; y++)
+                for (int32 x = 0; x < width; x++)
+                    *(buffer++) = clut[*(uint8*)((uintptr_t)(src++) ^ 1)];
+            break;
+    }
+
+    return true;
+}
+
+#else
+
 bool EmRegsSED1375::CopyLCDFrame(Frame& frame, bool fullRefresh) {
     const int32 bpp = 1 << ((fRegs.mode1 & sed1375BPPMask) >> sed1375BPPShift);
     const int32 width = (fRegs.horizontalPanelSize + 1) * 8;
@@ -319,6 +396,8 @@ bool EmRegsSED1375::CopyLCDFrame(Frame& frame, bool fullRefresh) {
 
     return false;
 }
+
+#endif
 
 uint16 EmRegsSED1375::GetLCD2bitMapping() { return 0xfa50; }
 

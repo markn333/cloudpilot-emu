@@ -44,6 +44,9 @@ void MetaMemory::MarkRange(emuptr start, emuptr end, uint8 v) {
     // just leave.
     if (EmMemGetBank(start).xlatemetaaddr == NULL) return;
 
+    // PalmCYD: allocated on the first mark (see EmBankSRAM::EnsureMetaMemory).
+    if (!gRAM_MetaMemory && !EmBankSRAM::EnsureMetaMemory()) return;
+
     uint8* startP = EmMemGetMetaAddress(start);
     uint8* endP = startP + (end - start);  // EmMemGetMetaAddress (end);
     uint8* end4P = (uint8*)(((uintptr_t)endP) & ~3);
@@ -100,6 +103,9 @@ void MetaMemory::MarkRange(emuptr start, emuptr end, uint8 v) {
 
 void MetaMemory::UnmarkRange(emuptr start, emuptr end, uint8 v) {
     if (end <= start) return;
+
+    // No meta memory yet: nothing is marked (PalmCYD, see EmBankSRAM::EnsureMetaMemory).
+    if (!gRAM_MetaMemory) return;
 
     // If there's no meta-memory (not needed for dedicated framebuffers)
     // just leave.
@@ -168,6 +174,13 @@ void MetaMemory::MarkUnmarkRange(emuptr start, emuptr end, uint8 andValue, uint8
     // just leave.
 
     if (EmMemGetBank(start).xlatemetaaddr == NULL) return;
+
+    // PalmCYD: meta memory is allocated on the first mark. Clearing bits of unallocated
+    // (all zero) meta memory changes nothing.
+    if (!gRAM_MetaMemory) {
+        if (orValue == 0) return;
+        if (!EmBankSRAM::EnsureMetaMemory()) return;
+    }
 
     // If the beginning and end of the buffer are not in the same address
     // space, just leave.  This can happen while initializing the Dragonball's

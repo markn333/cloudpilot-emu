@@ -90,7 +90,7 @@ void* Platform::AllocateMemory(size_t count) {
 
 void* Platform::AllocateMemoryClear(size_t count) {
     void* mem = Platform::AllocateMemory(count);
-    memset(mem, 0, count);
+    if (mem) memset(mem, 0, count);
 
     return mem;
 }

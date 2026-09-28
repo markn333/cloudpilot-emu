@@ -119,8 +119,9 @@ extern EmMemReadCacheEntry gEmMemReadCache[256];
 // Data write cache for the RAM banks (EmBankDRAM / EmBankSRAM), same layout as the read
 // cache. A hit does exactly what the bank's Set functions do for an aligned write that is
 // not write protected: store, mark the RAM page dirty, and report writes to meta memory
-// marked as screen buffer (EmMemScreenWritten). Only filled while SRAM write protection is
-// off; EmMemInvalidateCaches() must be called when that changes.
+// marked as screen buffer (EmMemScreenWritten). Banks that go through the SRAM write
+// protection check are only cached while it is off; change the protection with
+// EmMemSetProtectSRAM(), which drops those entries when it turns on.
 
 typedef struct EmMemWriteCacheEntry {
     emuptr base;   // bank base address (see EmMemInvalidateCaches for invalid entries)
@@ -441,6 +442,10 @@ struct MemAccessFlags {
 // Globals.
 
 extern MemAccessFlags gMemAccessFlags;
+
+// Set gMemAccessFlags.fProtect_SRAMSet (from the chip select registers). Drops RAM write
+// cache entries that relied on the protection being off when it turns on.
+void EmMemSetProtectSRAM(Bool protect);
 extern Bool gPCInRAM;
 extern Bool gPCInROM;
 

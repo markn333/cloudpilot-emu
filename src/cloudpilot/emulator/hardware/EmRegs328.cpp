@@ -776,8 +776,7 @@ void EmRegs328::Load(SavestateLoader<ChunkType>& savestate) {
     Bool sendTxData = false;
     EmRegs328::UARTStateChanged(sendTxData);
 
-    gMemAccessFlags.fProtect_SRAMSet = (READ_REGISTER(csASelect1) & 0x0008) != 0;
-    EmMemInvalidateCaches();  // the RAM write cache depends on SRAM write protection
+    EmMemSetProtectSRAM((READ_REGISTER(csASelect1) & 0x0008) != 0);
     markScreenScheduled = true;
     screenMarked = false;
     systemCycles = gSession->GetSystemCycles();
@@ -1652,8 +1651,7 @@ void EmRegs328::csASelect1Write(emuptr address, int size, uint32 value) {
 
     // Check its new state and update our ram-protect flag.
 
-    gMemAccessFlags.fProtect_SRAMSet = (READ_REGISTER(csASelect1) & 0x0008) != 0;
-    EmMemInvalidateCaches();  // the RAM write cache depends on SRAM write protection
+    EmMemSetProtectSRAM((READ_REGISTER(csASelect1) & 0x0008) != 0);
 }
 
 // ---------------------------------------------------------------------------

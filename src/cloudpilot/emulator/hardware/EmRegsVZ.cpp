@@ -633,8 +633,7 @@ void EmRegsVZ::Load(SavestateLoader<ChunkType>& loader) {
     EmRegsVZ::UARTStateChanged(sendTxData, 0);
     EmRegsVZ::UARTStateChanged(sendTxData, 1);
 
-    gMemAccessFlags.fProtect_SRAMSet = (READ_REGISTER(csDSelect) & 0x2000) != 0;
-    EmMemInvalidateCaches();  // the RAM write cache depends on SRAM write protection
+    EmMemSetProtectSRAM((READ_REGISTER(csDSelect) & 0x2000) != 0);
 
     ApplySdctl();
 
@@ -1769,8 +1768,7 @@ void EmRegsVZ::csDSelectWrite(emuptr address, int size, uint32 value) {
 
     // Check its new state and update our ram-protect flag.
 
-    gMemAccessFlags.fProtect_SRAMSet = (READ_REGISTER(csDSelect) & 0x2000) != 0;
-    EmMemInvalidateCaches();  // the RAM write cache depends on SRAM write protection
+    EmMemSetProtectSRAM((READ_REGISTER(csDSelect) & 0x2000) != 0);
 
     // Check to see if the unprotected memory range changed.
 

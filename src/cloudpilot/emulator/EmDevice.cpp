@@ -277,7 +277,11 @@ static const DeviceInfo kDeviceInfo[] = {
      "Palm IIIc",
      {"PalmIIIc", "Austin", "ColorDevice"},
      kSupports68EZ328 + kHasFlash,
+#if defined(ESP_PLATFORM)
+     4096,  // PalmCYD: 8MB of RAM does not fit into the 8MB PSRAM (Palm OS probes the RAM size)
+#else
      8192,
+#endif
      hwrMiscFlagIDPalmIIIc,
      hwrMiscFlagExtSubIDNone,
      {{'palm', 'astn'}}},

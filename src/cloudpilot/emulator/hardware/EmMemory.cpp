@@ -27,6 +27,7 @@
 #include "EmSystemState.h"  // gSystemState (EmMemScreenWritten)
 #include "MemoryRegion.h"
 #include "MetaMemory.h"  // MetaMemory::Initialize
+#include "Platform.h"    // Platform::AllocateMemoryClear
 #include "savestate/Savestate.h"
 #include "savestate/SavestateLoader.h"
 #include "savestate/SavestateProbe.h"
@@ -421,6 +422,28 @@ void EmMemInvalidateCaches(void) {
     }
 }
 
+namespace {
+    // Only the write cache depends on SRAM write protection; the fetch and read caches stay.
+    void InvalidateWriteCache() {
+        writeCacheDependsOnProtection = false;
+        for (uint32 i = 0; i < 256; i++) {
+            gEmMemWriteCache[i].base = (((i ^ 1) & 0xFF) << 16) | 1;
+            gEmMemWriteCache[i].host = nullptr;
+            gEmMemWriteCache[i].meta = nullptr;
+            gEmMemWriteCache[i].phy = 0;
+        }
+    }
+}  // namespace
+
+void EmMemSetProtectSRAM(Bool protect) {
+    const bool wasProtected = gMemAccessFlags.fProtect_SRAMSet;
+    gMemAccessFlags.fProtect_SRAMSet = protect;
+
+    // Entries filled while the protection was off must go when it turns on. Turning it off
+    // keeps every entry valid (they never skipped a protection check).
+    if (protect && !wasProtected && writeCacheDependsOnProtection) InvalidateWriteCache();
+}
+
 void EmMemScreenWritten(emuptr addressLo, emuptr addressHi) {
     gSystemState.MarkScreenDirty(addressLo, addressHi);
 }
@@ -527,12 +550,24 @@ namespace {
         if (ram == nullptr || dirtyPages == nullptr) return;
 
         uint8* host = bank->xlateaddr(base);
-        uint8* meta = bank->xlatemetaaddr(base);
+        uint8* meta;
+
+        if (gRAM_MetaMemory) {
+            meta = bank->xlatemetaaddr(base);
+        } else {
+            // No meta memory (all zero, see EmBankSRAM::EnsureMetaMemory): check a shared zero
+            // page instead. It covers a whole bank plus the 4 bytes a long write may look at.
+            // Allocated once (64KB, PSRAM) and kept; the Palm V also uses it until its first mark.
+            static uint8* zeroMeta = nullptr;
+            if (!zeroMeta) zeroMeta = (uint8*)Platform::AllocateMemoryClear(0x10000 + 4);
+            if (!zeroMeta) return;
+            meta = zeroMeta;
+        }
 
         // DRAM uses the unmasked address for meta memory and SRAM the masked one; both agree
         // with the host offset for the banks we cache (the RAM region is at most 16MB and
         // its mask is the region size - 1).
-        if (meta != gRAM_MetaMemory + (host - ram)) return;
+        if (gRAM_MetaMemory && meta != gRAM_MetaMemory + (host - ram)) return;
 
         EmMemWriteCacheEntry* entry = EmMemWriteCacheEntryFor(addr);
         entry->base = base;
@@ -734,7 +769,7 @@ CEnableFullAccess::~CEnableFullAccess(void) {
     gMemAccessFlags = fOldMemAccessFlags;
 
     // Protection may be back on: drop write cache entries that were filled without it.
-    if (gMemAccessFlags.fProtect_SRAMSet && writeCacheDependsOnProtection) EmMemInvalidateCaches();
+    if (gMemAccessFlags.fProtect_SRAMSet && writeCacheDependsOnProtection) InvalidateWriteCache();
 
     --fgAccessCount;
 }

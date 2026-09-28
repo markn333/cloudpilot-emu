@@ -30,6 +30,9 @@ class EmBankSRAM {
 
     static void SetBankHandlers(void);
 
+    // Allocate the meta memory if it does not exist yet (PalmCYD: allocated on first use).
+    static bool EnsureMetaMemory(void);
+
     static uint32 GetLong(emuptr address);
     static uint32 GetWord(emuptr address);
     static uint32 GetByte(emuptr address);
