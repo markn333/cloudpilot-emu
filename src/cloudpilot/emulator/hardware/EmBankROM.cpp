@@ -58,6 +58,8 @@ static uint32 gManagedROMSize;
 static uint32 gROMImage_Size;
 static uint32 gROMBank_Mask;
 static uint8* gROM_Memory;
+static bool gROMPreswapped = false;  // PalmCYD: see EmBankROM::SetPreswappedImage
+static bool gROMIsExternal = false;  // gROM_Memory is not ours (memory-mapped flash)
 
 /***********************************************************************
  *
@@ -82,8 +84,12 @@ bool EmBankROM::Initialize(size_t len, const uint8* buffer) {
     // called, so it is critical that all parts of a horde use the
     // same ROM image.
 
+    if (gROMPreswapped) return EmBankROM::LoadROMPreswapped(len, buffer);
+
     return EmBankROM::LoadROM(len, buffer);
 }
+
+void EmBankROM::SetPreswappedImage(bool preswapped) { gROMPreswapped = preswapped; }
 
 /***********************************************************************
  *
@@ -118,7 +124,15 @@ void EmBankROM::Reset(Bool /*hardwareReset*/) {}
  *
  ***********************************************************************/
 
-void EmBankROM::Dispose(void) { Platform::DisposeMemory(gROM_Memory); }
+void EmBankROM::Dispose(void) {
+    if (gROMIsExternal) {
+        gROM_Memory = nullptr;
+        gROMIsExternal = false;
+        return;
+    }
+
+    Platform::DisposeMemory(gROM_Memory);
+}
 
 /***********************************************************************
  *
@@ -451,6 +465,69 @@ bool EmBankROM::LoadROM(size_t len, const uint8* buffer) {
     // it can find signatures there.  If we map the ROM to zero,
     // then we'll get bus errors when those accesses are made.)
 
+    gROMMemoryStart = cardHeader.resetVector & 0xFFF00000;
+
+    return true;
+}
+
+/***********************************************************************
+ *
+ * FUNCTION:	EmBankROM::LoadROMPreswapped
+ *
+ * DESCRIPTION: PalmCYD (ESP32). Like LoadROM, but the image is already
+ *				byteswapped and is used in place (no copy). The image
+ *				must contain both the small and the big ROM, and the
+ *				caller must map at least NextPowerOf2(len) bytes at
+ *				buffer (the ROM bank masks addresses with that size).
+ *
+ ***********************************************************************/
+
+namespace {
+    // Undo ByteswapWords for a small region (the card headers are checked in ROM order).
+    void UnswapBytes(const uint8* swapped, size_t offset, uint8* dst, size_t len) {
+        for (size_t i = 0; i < len; i++) dst[i] = swapped[(offset + i) ^ 1];
+    }
+}  // namespace
+
+bool EmBankROM::LoadROMPreswapped(size_t len, const uint8* buffer) {
+    const size_t headerSize = EmProxyCardHeaderType::GetSize();
+    if (len < headerSize) return false;
+
+    EmProxyCardHeaderType cardHeader;
+    UnswapBytes(buffer, 0, (uint8*)cardHeader.GetPtr(), headerSize);
+    if (!Card::CheckCardHeader(cardHeader)) return false;
+
+    int32 bigROMOffset = (cardHeader.hdrVersion == 1) ? 0x3000 : (cardHeader.bigROMOffset & 0x000FFFFF);
+    if (len < (size_t)bigROMOffset + headerSize) return false;
+
+    // Only complete images (small + big ROM) can be used in place: a missing small ROM
+    // would have to be dummied up in front of the image.
+    EmProxyCardHeaderType cardHeader2;
+    UnswapBytes(buffer, bigROMOffset, (uint8*)cardHeader2.GetPtr(), headerSize);
+    if (!Card::CheckCardHeader(cardHeader2)) return false;
+
+    // Check that the ROM can be run on this device (same as LoadROM).
+    EmAliasCardHeaderType<LAS> cardHdr(cardHeader.GetPtr());
+
+    EmAssert(gSession);
+    if (Card::SupportsEZ(cardHdr)) {
+        if (!gSession->GetDevice().Supports68EZ328() && !gSession->GetDevice().HasBogusEZFlag())
+            return false;
+    } else if (Card::SupportsVZ(cardHdr)) {
+        if (!gSession->GetDevice().Supports68VZ328()) return false;
+    } else if (Card::SupportsSZ(cardHdr)) {
+        if (!gSession->GetDevice().Supports68SZ328()) return false;
+    } else {
+        if (!gSession->GetDevice().Supports68328()) return false;
+    }
+
+    EmAssert(gROM_Memory == NULL);
+
+    gROMImage_Size = len;
+    gROMBank_Size = ::NextPowerOf2(gROMImage_Size);
+    gROMBank_Mask = gROMBank_Size - 1;
+    gROM_Memory = const_cast<uint8*>(buffer);
+    gROMIsExternal = true;
     gROMMemoryStart = cardHeader.resetVector & 0xFFF00000;
 
     return true;

@@ -116,10 +116,11 @@ extern EmMemReadCacheEntry gEmMemReadCache[256];
 
 #define EmMemReadCacheEntryFor(addr) (&gEmMemReadCache[((addr) >> 16) & 0xFF])
 
-// Data write cache for the RAM banks (EmBankDRAM / EmBankSRAM), same layout as the read
-// cache. A hit does exactly what the bank's Set functions do for an aligned write that is
-// not write protected: store, mark the RAM page dirty, and report writes to meta memory
-// marked as screen buffer (EmMemScreenWritten). Banks that go through the SRAM write
+// Data write cache for the RAM banks (EmBankDRAM / EmBankSRAM) and framebuffers
+// (EmRegs::GetCacheableHost), same layout as the read cache. A hit does exactly what the
+// bank's Set functions do for an aligned write that is not write protected: store, mark the
+// page dirty, and report writes to meta memory marked as screen buffer (EmMemScreenWritten;
+// a framebuffer uses a meta page that is all screen buffer). Banks that go through the SRAM write
 // protection check are only cached while it is off; change the protection with
 // EmMemSetProtectSRAM(), which drops those entries when it turns on.
 
@@ -127,11 +128,11 @@ typedef struct EmMemWriteCacheEntry {
     emuptr base;   // bank base address (see EmMemInvalidateCaches for invalid entries)
     uint8* host;   // host address of base
     uint8* meta;   // meta memory address of base
-    emuptr phy;    // offset of base in the RAM region (for the dirty page bitmap)
+    emuptr phy;    // offset of base in its memory region (for the dirty page bitmap)
+    uint8* dirty;  // dirty page bitmap of that region
 } EmMemWriteCacheEntry;
 
 extern EmMemWriteCacheEntry gEmMemWriteCache[256];
-extern uint8* gEmMemRamDirtyPages;
 
 #define EmMemWriteCacheEntryFor(addr) (&gEmMemWriteCache[((addr) >> 16) & 0xFF])
 
@@ -144,9 +145,8 @@ STATIC_INLINE void EmMemDoPut32(void* a, uint32 v);
 STATIC_INLINE void EmMemDoPut16(void* a, uint16 v);
 STATIC_INLINE void EmMemDoPut8(void* a, uint8 v);
 
-// Same as markDirty() in EmBankDRAM.cpp / EmBankSRAM.cpp.
-#define EmMemMarkRamDirty(phy) \
-    (gEmMemRamDirtyPages[(phy) >> 13] |= (uint8)(1 << (((phy) >> 10) & 0x07)))
+// Same as markDirty() in EmBankDRAM.cpp / EmBankSRAM.cpp / EmRegsFrameBuffer.cpp.
+#define EmMemMarkRamDirty(dirty, phy) ((dirty)[(phy) >> 13] |= (uint8)(1 << (((phy) >> 10) & 0x07)))
 
 // MetaMemory::kScreenBuffer in every byte (see MetaMemory.h).
 #define EmMemScreenBits8 0x20
@@ -233,8 +233,8 @@ STATIC_INLINE void EmMemPut32(emuptr addr, uint32 l) {
         const uint16* meta = (const uint16*)(entry->meta + offset);
 
         EmMemDoPut32(entry->host + offset, l);
-        EmMemMarkRamDirty(phy);
-        EmMemMarkRamDirty(phy + 2);
+        EmMemMarkRamDirty(entry->dirty, phy);
+        EmMemMarkRamDirty(entry->dirty, phy + 2);
         if (((meta[0] | meta[1]) & EmMemScreenBits16) != 0) EmMemScreenWritten(addr, addr + 4);
 
         return;
@@ -260,7 +260,7 @@ STATIC_INLINE void EmMemPut16(emuptr addr, uint16 w) {
         const emuptr phy = entry->phy + offset;
 
         EmMemDoPut16(entry->host + offset, w);
-        EmMemMarkRamDirty(phy);
+        EmMemMarkRamDirty(entry->dirty, phy);
         if ((*(const uint16*)(entry->meta + offset) & EmMemScreenBits16) != 0)
             EmMemScreenWritten(addr, addr + 2);
 
@@ -287,7 +287,7 @@ STATIC_INLINE void EmMemPut8(emuptr addr, uint8 b) {
         const emuptr phy = entry->phy + offset;
 
         EmMemDoPut8(entry->host + offset, b);
-        EmMemMarkRamDirty(phy);
+        EmMemMarkRamDirty(entry->dirty, phy);
         if ((entry->meta[offset] & EmMemScreenBits8) != 0) EmMemScreenWritten(addr, addr);
 
         return;

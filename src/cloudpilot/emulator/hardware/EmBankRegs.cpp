@@ -386,6 +386,8 @@ void EmBankRegs::AddSubBank(EmRegs* bank) {
 
 void EmBankRegs::EnableSubBank(emuptr address) {
     PrvSwitchBanks(fgDisabledSubBanks, fgSubBanks, address);
+    gLastSubBank = NULL;
+    EmMemInvalidateCaches();  // the memory caches may hold a framebuffer bank (GetCacheableHost)
 }
 
 // ---------------------------------------------------------------------------
@@ -394,11 +396,31 @@ void EmBankRegs::EnableSubBank(emuptr address) {
 
 void EmBankRegs::DisableSubBank(emuptr address) {
     PrvSwitchBanks(fgSubBanks, fgDisabledSubBanks, address);
+    gLastSubBank = NULL;
+    EmMemInvalidateCaches();  // the memory caches may hold a framebuffer bank (GetCacheableHost)
 }
 
 // ---------------------------------------------------------------------------
 //		� EmBankRegs::GetSubBank
 // ---------------------------------------------------------------------------
+
+namespace {
+    // The last 64KB bank that turned out not to be cacheable (the CPU registers are accessed
+    // all the time and would search the sub bank list on every access otherwise).
+    emuptr gLastNotCacheable = 1;
+}  // namespace
+
+void EmBankRegs::ForgetCacheableHosts() { gLastNotCacheable = 1; }
+
+uint8* EmBankRegs::GetCacheableHost(emuptr base, uint8** dirtyPages, emuptr* phy) {
+    if (base == gLastNotCacheable) return nullptr;
+
+    EmRegs* bank = EmBankRegs::GetSubBank(base, 0x10000);
+    uint8* host = bank ? bank->GetCacheableHost(base, dirtyPages, phy) : nullptr;
+    if (host == nullptr) gLastNotCacheable = base;
+
+    return host;
+}
 
 EmRegs* EmBankRegs::GetSubBank(emuptr address, long size) {
     // Cast address to a 64-bit value in case address + size == 0x1 0000 0000.

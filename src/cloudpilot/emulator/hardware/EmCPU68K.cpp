@@ -1129,6 +1129,9 @@ void EmCPU68K::UpdateRegistersFromSR(void) {
 // ---------------------------------------------------------------------------
 
 void EmCPU68K::BusError(emuptr address, long size, Bool forRead) {
+#if defined(ESP_PLATFORM) && defined(PALMCYD_TRACE)
+    printf("PalmCYD bus error addr=%08lx size=%ld %s\n", (unsigned long)address, size, forRead ? "read" : "write");
+#endif
     this->ProcessException(kException_BusErr);
     return;
 }

@@ -278,6 +278,35 @@ Bool EmPalmOS::HandleSystemCall(Bool fromTrap) {
     gDebugger.NotifyTrap(context.fTrapWord);
 #endif
 
+#if defined(ESP_PLATFORM) && defined(PALMCYD_TRACE)
+    // PalmCYD (build flag PALMCYD_TRACE, for bring-up only): log fatal errors and resets. ErrDisplayFileLineMsg(fileName, lineNo, msg): the
+    // arguments are on the stack at sp+0 (char*), sp+4 (UInt16) and sp+6 (char*). Only strings
+    // in RAM or ROM are read (reading elsewhere would raise a bus error in the emulated CPU).
+    if (context.fTrapWord == 0xA084 || context.fTrapWord == 0xA0AD || context.fTrapWord == 0xA08C) {
+        const emuptr sp = m68k_areg(regs, 7);
+        printf("PalmCYD trap %04x pc=%08lx\n", (unsigned)context.fTrapWord,
+               (unsigned long)(gCPU->GetPC() - pcAdjust));
+        if (context.fTrapWord == 0xA084) {
+            auto readString = [](emuptr p, char* text, size_t size) {
+                size_t n = 0;
+                const bool readable =
+                    p < EmBankDRAM::GetDynamicHeapSize() ||
+                    (p >= EmBankROM::GetMemoryStart() && p < EmBankROM::GetMemoryStart() + 0x800000);
+                for (; readable && n < size - 1; n++) {
+                    const uint8 c = EmMemGet8(p + n);
+                    if (c == 0) break;
+                    text[n] = (c >= 0x20 && c < 0x7F) ? c : '?';
+                }
+                text[n] = 0;
+            };
+            char file[64], msg[128];
+            readString(EmMemGet32(sp), file, sizeof(file));
+            readString(EmMemGet32(sp + 6), msg, sizeof(msg));
+            printf("PalmCYD fatal: %s line %u: %s\n", file, (unsigned)EmMemGet16(sp + 4), msg);
+        }
+    }
+#endif
+
     CEnableFullAccess munge;
 
     UInt32 memSemaphoreIDP = EmLowMem_GetGlobal(memSemaphoreID);

@@ -542,6 +542,7 @@ void EmRegsVZ::Initialize(void) {
     systemCycles = gSession->GetSystemCycles();
     tmr1LastProcessedSystemCycles = systemCycles;
     tmr2LastProcessedSystemCycles = systemCycles;
+    EmHAL::gCycleNow = systemCycles;
 
     fUART[0] = new EmUARTDragonball(EmUARTDragonball::kUART_DragonballVZ, 0);
     fUART[1] = new EmUARTDragonball(EmUARTDragonball::kUART_DragonballVZ, 1);
@@ -563,6 +564,7 @@ void EmRegsVZ::Reset(Bool hardwareReset) {
     UnmarkScreen();
 
     if (hardwareReset) {
+        SyncSystemCycles();
         tmr1LastProcessedSystemCycles = systemCycles;
         tmr2LastProcessedSystemCycles = systemCycles;
 
@@ -642,8 +644,12 @@ void EmRegsVZ::Load(SavestateLoader<ChunkType>& loader) {
     afterLoad = true;
 
     systemCycles = gSession->GetSystemCycles();
+    EmHAL::gCycleNow = systemCycles;
     UpdateTimers();
     powerOffCached = GetAsleep();
+
+    // Make sure Cycle() runs right away to handle afterLoad.
+    EmHAL::gNextCycleEvent = 0;
 }
 
 template <typename T>
@@ -961,6 +967,25 @@ inline void EmRegsVZ::Cycle(uint64 systemCycles, Bool sleeping) {
     this->systemCycles = systemCycles;
 
     if (unlikely(systemCycles >= nextTimerEventAfterCycle)) UpdateTimers();
+
+    PublishNextCycleEvent();
+}
+
+// The CPU loop only calls Cycle() when an event is due, so this->systemCycles can lag behind.
+// Bring it up to the cycle count of the last executed instruction before using it.
+void EmRegsVZ::SyncSystemCycles() {
+    // Same value the original per-instruction Cycle() would have stored (it returned early
+    // while powered off, leaving systemCycles alone).
+    if (!powerOffCached) systemCycles = EmHAL::gCycleNow;
+}
+
+void EmRegsVZ::PublishNextCycleEvent() {
+    // Only take the fast path if we are the only cycle consumer (the UARTs add one in sync mode).
+    // While afterLoad is pending or an SPI1 transfer counts down, keep dispatching every
+    // instruction so that Cycle() handles them exactly as before.
+    EmHAL::gNextCycleEvent =
+        (EmHAL::CycleConsumerCount() == 1 && !afterLoad && !spi1TransferInProgress) ? nextTimerEventAfterCycle
+                                                                                     : 0;
 }
 
 void EmRegsVZ::SetUARTSync(bool sync) {
@@ -3026,6 +3051,12 @@ uint32 EmRegsVZ::CyclesToNextInterrupt(uint64 systemCycles) {
 }
 
 void EmRegsVZ::UpdateTimers() {
+    SyncSystemCycles();
+    UpdateTimersImpl();
+    PublishNextCycleEvent();
+}
+
+void EmRegsVZ::UpdateTimersImpl() {
     nextTimerEventAfterCycle = ~0;
     if (GetAsleep()) return;
 
@@ -3211,8 +3242,12 @@ void EmRegsVZ::spiCont1Write(emuptr address, int size, uint32 value) {
     };
 
     if (value & ~valueOld & 0x0100) {
+        // Cycle() measures the SPI countdown from systemCycles, which lags behind while the
+        // CPU loop skips Cycle(): bring it up to date before the transfer starts.
+        SyncSystemCycles();
         spi1Countdown = 0;
         Spi1TransmitWord();
+        PublishNextCycleEvent();
     }
 
     if (~value & valueOld & 0x0100) {

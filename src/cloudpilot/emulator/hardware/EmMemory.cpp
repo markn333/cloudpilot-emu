@@ -397,7 +397,6 @@ emuptr gEmMemFetchBase = 1;
 uint8* gEmMemFetchHost = nullptr;
 EmMemReadCacheEntry gEmMemReadCache[256];
 EmMemWriteCacheEntry gEmMemWriteCache[256];
-uint8* gEmMemRamDirtyPages = nullptr;
 
 namespace {
     // Set when a write cache entry relies on SRAM write protection being off.
@@ -407,6 +406,7 @@ namespace {
 void EmMemInvalidateCaches(void) {
     gEmMemFetchBase = 1;
     writeCacheDependsOnProtection = false;
+    EmBankRegs::ForgetCacheableHosts();
 
     // An invalid entry must never match: entry i is only looked up for addresses whose
     // bits 16-23 equal i, so give it a base with different bits 16-23 (the byte path does
@@ -419,6 +419,7 @@ void EmMemInvalidateCaches(void) {
         gEmMemWriteCache[i].host = nullptr;
         gEmMemWriteCache[i].meta = nullptr;
         gEmMemWriteCache[i].phy = 0;
+        gEmMemWriteCache[i].dirty = nullptr;
     }
 }
 
@@ -431,6 +432,7 @@ namespace {
             gEmMemWriteCache[i].host = nullptr;
             gEmMemWriteCache[i].meta = nullptr;
             gEmMemWriteCache[i].phy = 0;
+            gEmMemWriteCache[i].dirty = nullptr;
         }
     }
 }  // namespace
@@ -468,6 +470,13 @@ namespace {
     // the host address of the bank containing addr, or nullptr if the bank is not cacheable.
     uint8* CacheableBankHost(emuptr addr) {
         EmAddressBank* bank = EmMemGetBankPtr(addr);
+
+        if (bank->wget == EmBankRegs::GetWord) {
+            // A framebuffer reads like plain memory.
+            uint8* dirtyPages;
+            emuptr phy;
+            return EmBankRegs::GetCacheableHost(addr & 0xFFFF0000, &dirtyPages, &phy);
+        }
 
         if (bank->xlateaddr == nullptr) return nullptr;
         if (bank->wget != EmBankROM::GetWord && bank->wget != EmBankSRAM::GetWord &&
@@ -531,10 +540,46 @@ namespace {
     // A RAM bank can use the write cache if its Set functions are the plain DRAM / SRAM ones
     // and SRAM write protection is off (then both only store, mark the page dirty and check
     // the screen bits in meta memory, see EmBankDRAM::SetLong / EmBankSRAM::SetLong).
+    // Meta memory for a framebuffer bank: every byte is screen buffer. Covers a whole bank plus
+    // the 4 bytes a long write may look at. Allocated once (64KB, PSRAM) and kept.
+    uint8* ScreenMetaPage() {
+        static uint8* page = nullptr;
+        if (!page) {
+            page = (uint8*)Platform::AllocateMemoryClear(0x10000 + 4);
+            if (page) memset(page, EmMemScreenBits8, 0x10000 + 4);
+        }
+        return page;
+    }
+
+    bool FillWriteCacheFrameBuffer(emuptr addr) {
+        const emuptr base = addr & 0xFFFF0000;
+
+        uint8* dirtyPages;
+        emuptr phy;
+        uint8* host = EmBankRegs::GetCacheableHost(base, &dirtyPages, &phy);
+        if (host == nullptr || dirtyPages == nullptr) return false;
+
+        uint8* meta = ScreenMetaPage();
+        if (meta == nullptr) return false;
+
+        EmMemWriteCacheEntry* entry = EmMemWriteCacheEntryFor(addr);
+        entry->base = base;
+        entry->host = host;
+        entry->meta = meta;
+        entry->phy = phy;
+        entry->dirty = dirtyPages;
+
+        return true;
+    }
+
     void FillWriteCache(emuptr addr) {
         const emuptr base = addr & 0xFFFF0000;
 
         EmAddressBank* bank = EmMemGetBankPtr(addr);
+        if (bank->lput == EmBankRegs::SetLong) {
+            FillWriteCacheFrameBuffer(addr);
+            return;
+        }
         if (bank->lput != EmBankDRAM::SetLong && bank->lput != EmBankSRAM::SetLong) return;
         if (bank->xlateaddr == nullptr || bank->xlatemetaaddr == nullptr) return;
         if (!RamMaskIsRegionSize()) return;
@@ -574,7 +619,7 @@ namespace {
         entry->host = host;
         entry->meta = meta;
         entry->phy = host - ram;
-        gEmMemRamDirtyPages = dirtyPages;
+        entry->dirty = dirtyPages;
         if (dependsOnProtection) writeCacheDependsOnProtection = true;
     }
 }  // namespace

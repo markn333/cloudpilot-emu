@@ -37,6 +37,8 @@ class EmRegsFrameBuffer : public EmRegs {
     virtual emuptr GetAddressStart(void);
     virtual uint32 GetAddressRange(void);
 
+    virtual uint8* GetCacheableHost(emuptr base, uint8** dirtyPages, emuptr* phy);
+
    private:
     template <typename T>
     void DoSave(T& savestate);

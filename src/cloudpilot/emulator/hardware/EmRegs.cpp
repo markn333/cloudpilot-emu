@@ -79,7 +79,7 @@
 //		� EmRegs::EmRegs
 // ---------------------------------------------------------------------------
 
-EmRegs::EmRegs(void) : fReadFunctions(), fWriteFunctions() {}
+EmRegs::EmRegs(void) : fReadFunctions(), fWriteFunctions(), fHandlerIndex() {}
 
 // ---------------------------------------------------------------------------
 //		� EmRegs::~EmRegs
@@ -144,7 +144,7 @@ uint32 EmRegs::GetLong(emuptr address) {
     //	EmAssert (this->ValidAddress (address, 4));
 
     long offset = address - this->GetAddressStart();
-    ReadFunction fn = fReadFunctions[offset];
+    ReadFunction fn = ReadHandlerAt(offset);
     EmAssert(fn);
 
     return (this->*fn)(address, 4);
@@ -158,7 +158,7 @@ uint32 EmRegs::GetWord(emuptr address) {
     //	EmAssert (this->ValidAddress (address, 2));
 
     long offset = address - this->GetAddressStart();
-    ReadFunction fn = fReadFunctions[offset];
+    ReadFunction fn = ReadHandlerAt(offset);
     EmAssert(fn);
 
     return (this->*fn)(address, 2);
@@ -172,7 +172,7 @@ uint32 EmRegs::GetByte(emuptr address) {
     //	EmAssert (this->ValidAddress (address, 1));
 
     long offset = address - this->GetAddressStart();
-    ReadFunction fn = fReadFunctions[offset];
+    ReadFunction fn = ReadHandlerAt(offset);
     EmAssert(fn);
 
     return (this->*fn)(address, 1);
@@ -186,7 +186,7 @@ void EmRegs::SetLong(emuptr address, uint32 value) {
     //	EmAssert (this->ValidAddress (address, 4));
 
     long offset = address - this->GetAddressStart();
-    WriteFunction fn = fWriteFunctions[offset];
+    WriteFunction fn = WriteHandlerAt(offset);
     EmAssert(fn);
 
     (this->*fn)(address, 4, value);
@@ -200,7 +200,7 @@ void EmRegs::SetWord(emuptr address, uint32 value) {
     //	EmAssert (this->ValidAddress (address, 2));
 
     long offset = address - this->GetAddressStart();
-    WriteFunction fn = fWriteFunctions[offset];
+    WriteFunction fn = WriteHandlerAt(offset);
     EmAssert(fn);
 
     (this->*fn)(address, 2, value);
@@ -214,7 +214,7 @@ void EmRegs::SetByte(emuptr address, uint32 value) {
     //	EmAssert (this->ValidAddress (address, 1));
 
     long offset = address - this->GetAddressStart();
-    WriteFunction fn = fWriteFunctions[offset];
+    WriteFunction fn = WriteHandlerAt(offset);
     EmAssert(fn);
 
     (this->*fn)(address, 1, value);
@@ -230,8 +230,8 @@ int EmRegs::ValidAddress(emuptr address, uint32 size) {
     int result = false;
     unsigned long offset = address - this->GetAddressStart();
 
-    if (offset < fReadFunctions.size()) {
-        ReadFunction fn = fReadFunctions[offset];
+    if (offset < fHandlerIndex.size()) {
+        ReadFunction fn = ReadHandlerAt(offset);
         result = (fn != &EmRegs::UnsupportedRead);
     }
 
@@ -255,22 +255,37 @@ uint8* EmRegs::GetRealAddress(emuptr address) {
 // ---------------------------------------------------------------------------
 
 void EmRegs::SetHandler(ReadFunction read, WriteFunction write, uint32 start, int count) {
-    if (fReadFunctions.size() == 0) {
+    if (fHandlerIndex.size() == 0) {
         uint32 range = this->GetAddressRange();
 
-        fReadFunctions.resize(range, &EmRegs::UnsupportedRead);
-        fWriteFunctions.resize(range, &EmRegs::UnsupportedWrite);
+        // Pair 0 is the default (unsupported) handler.
+        fReadFunctions.assign(1, &EmRegs::UnsupportedRead);
+        fWriteFunctions.assign(1, &EmRegs::UnsupportedWrite);
+        fHandlerIndex.assign(range, 0);
+    }
+
+    // Find or add the (read, write) pair.
+    size_t pair = 0;
+    while (pair < fReadFunctions.size() &&
+           !(fReadFunctions[pair] == read && fWriteFunctions[pair] == write))
+        pair++;
+
+    if (pair == fReadFunctions.size()) {
+        if (pair > 0xFF) {
+            printf("EmRegs: more than 256 distinct register handlers\n");
+            abort();
+        }
+
+        fReadFunctions.push_back(read);
+        fWriteFunctions.push_back(write);
     }
 
     int index = start - this->GetAddressStart();
 
     EmAssert(index >= 0);
-    EmAssert(index < (long)fReadFunctions.size());
+    EmAssert(index < (long)fHandlerIndex.size());
 
-    for (int ii = 0; ii < count; ++ii, ++index) {
-        fReadFunctions[index] = read;
-        fWriteFunctions[index] = write;
-    }
+    for (int ii = 0; ii < count; ++ii, ++index) fHandlerIndex[index] = static_cast<uint8>(pair);
 }
 
 // ---------------------------------------------------------------------------

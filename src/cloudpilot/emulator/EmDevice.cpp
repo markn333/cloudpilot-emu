@@ -546,7 +546,12 @@ static const DeviceInfo kDeviceInfo[] = {
      "PEG-N700C/N710C series",
      {"PEG-N700C/N710C"},
      kSupports68VZ328,
+#if defined(ESP_PLATFORM)
+     4096,  // PalmCYD: 8MB of RAM does not fit the 8MB PSRAM. 4MB keeps the 256KB dynamic heap
+                    // (Palm OS gives 128KB below 4MB); the ROM image is patched to use the probed size
+#else
      8192,
+#endif
      UNSUPPORTED,
      UNSUPPORTED,
      {{'sony', 'ysmt'}}},

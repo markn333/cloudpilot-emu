@@ -122,6 +122,21 @@ uint32 EmRegsFrameBuffer::GetByte(emuptr address) {
 }
 
 // ---------------------------------------------------------------------------
+//		� EmRegsFrameBuffer::GetCacheableHost
+// ---------------------------------------------------------------------------
+// The Set functions only store, mark the screen dirty and mark the page dirty, which the
+// memory write cache does too (the framebuffer is always screen memory).
+
+uint8* EmRegsFrameBuffer::GetCacheableHost(emuptr base, uint8** dirtyPages_, emuptr* phy) {
+    if (base < fBaseAddr || base - fBaseAddr + 0x10000 > framebufferSize) return nullptr;
+
+    *dirtyPages_ = dirtyPages;
+    *phy = base - fBaseAddr;
+
+    return framebuffer + (base - fBaseAddr);
+}
+
+// ---------------------------------------------------------------------------
 //		� EmRegsFrameBuffer::SetLong
 // ---------------------------------------------------------------------------
 

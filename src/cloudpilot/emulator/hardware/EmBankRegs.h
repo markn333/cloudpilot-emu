@@ -46,6 +46,10 @@ class EmBankRegs {
     static void EnableSubBank(emuptr address);
     static void DisableSubBank(emuptr address);
 
+    // PalmCYD: see EmRegs::GetCacheableHost (nullptr unless one sub bank covers the whole bank)
+    static uint8* GetCacheableHost(emuptr base, uint8** dirtyPages, emuptr* phy);
+    static void ForgetCacheableHosts();  // called by EmMemInvalidateCaches
+
    private:
     static EmRegs* GetSubBank(emuptr address, long size);
     static void AddressError(emuptr address, long size, Bool forRead);

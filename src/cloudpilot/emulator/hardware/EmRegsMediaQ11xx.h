@@ -284,6 +284,16 @@ class EmRegsMediaQ11xx : public EmRegs, public MediaQFramebuffer<EmRegsMediaQ11x
     void PrvSetPixel(uint16 pixel, uint16 x, uint16 y);
     uint16 PrvGetPixel(uint16 x, uint16 y);
     emuptr PrvGetPixelLocation(uint16 x, uint16 y);
+#if defined(ESP_PLATFORM)
+    // PalmCYD: host address of a pixel in the framebuffer, or nullptr if the pixel is not
+    // completely inside it (then the pixel goes through the memory handlers as before).
+    uint8* PrvGetPixelHost(emuptr pixelLocation, uint32 bytesPerPixel);
+
+    // The framebuffer region (host address, size, dirty page bitmap), looked up on first use.
+    uint8* fFbHost{nullptr};
+    uint8* fFbDirty{nullptr};
+    uint32 fFbSize{0};
+#endif
 
     void PrvIncBlitterInit();
     void PrvIncBlitterRun();

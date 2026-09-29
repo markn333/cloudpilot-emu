@@ -17,6 +17,35 @@ class MediaQFramebuffer : public EmHALHandler {
    protected:
     MediaQFramebuffer() = default;
 
+#if defined(ESP_PLATFORM)
+    // PalmCYD: the ESP32 display takes RGB565, so deliver 16 bits per pixel. The 16bpp
+    // framebuffer already is RGB565 (no conversion to 32 bits and back), and the frame buffer
+    // needs half the memory.
+    using Pixel = uint16;
+    static constexpr uint32 kFrameBpp = 16;
+
+    // Palette entries are 0xffBBGGRR.
+    static inline Pixel FromPalette(uint32 p) {
+        return static_cast<Pixel>(((p & 0xF8) << 8) | ((p >> 5) & 0x7E0) | ((p >> 19) & 0x1F));
+    }
+
+    // RRRRRGGG GGGBBBBB
+    static inline Pixel FromRgb565(uint16 p) { return p; }
+#else
+    using Pixel = uint32;
+    static constexpr uint32 kFrameBpp = 24;
+
+    static inline Pixel FromPalette(uint32 p) { return p; }
+
+    static inline Pixel FromRgb565(uint16 p) {
+        // Shift the bits around, forming RRRRRrrr, GGGGGGgg, and BBBBBbbb values, where the
+        // lower-case bits are copies of the least significant bits in the upper-case bits.
+        return 0xff000000 | ((((p << 3) & 0xF8) | ((p >> 0) & 0x07)) << 16) |
+               ((((p >> 3) & 0xFC) | ((p >> 5) & 0x03)) << 8) |
+               (((p >> 8) & 0xF8) | ((p >> 11) & 0x07));
+    }
+#endif
+
    public:
     virtual bool CopyLCDFrame(Frame& frame, bool fullRefresh) override;
 
@@ -25,7 +54,7 @@ class MediaQFramebuffer : public EmHALHandler {
     bool DecodeFrame(Frame& frame, uint32 rowBytes, uint32 bpp, bool fullRefresh);
 
     template <bool flipX, bool flipY, bool swapXY>
-    inline void UpdatePixel(uint32*& destBuffer, Frame& frame, uint32 x, uint32 y, uint32 value);
+    inline void UpdatePixel(Pixel*& destBuffer, Frame& frame, uint32 x, uint32 y, Pixel value);
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -60,14 +89,14 @@ bool MediaQFramebuffer<T>::CopyLCDFrame(Frame& frame, bool fullRefresh) {
 
     frame.scaleX = scaleX;
     frame.scaleY = scaleY;
-    frame.bpp = 24;
+    frame.bpp = kFrameBpp;
     frame.lineWidth = width / frame.scaleX;
     frame.lines = height / frame.scaleY;
     frame.margin = 0;
-    frame.bytesPerLine = frame.lineWidth * 4;
+    frame.bytesPerLine = frame.lineWidth * sizeof(Pixel);
     frame.hasChanges = true;
 
-    if (4 * frame.lineWidth * frame.lines > frame.GetBufferSize()) return false;
+    if (sizeof(Pixel) * frame.lineWidth * frame.lines > frame.GetBufferSize()) return false;
 
     // We combine those four flags in to a nibble and instantiate a template in a switch block
     // in order to generate optimized code paths for the various combinations.
@@ -152,7 +181,7 @@ bool MediaQFramebuffer<T>::DecodeFrame(Frame& frame, uint32 rowBytes, uint32 bpp
     // flip the dirty region for the frontend.
     if constexpr (!swapXY && flipY) frame.FlipDirtyRegion();
 
-    uint32* destBuffer = reinterpret_cast<uint32*>(frame.GetBuffer());
+    Pixel* destBuffer = reinterpret_cast<Pixel*>(frame.GetBuffer());
 
     // If the image is not transformed we can skip recalculating the offset and just increment
     // the pointer. In this case we need to fast-forward the pointer to the start of relevant
@@ -175,7 +204,8 @@ bool MediaQFramebuffer<T>::DecodeFrame(Frame& frame, uint32 rowBytes, uint32 bpp
             for (uint32 y = firstLine; y <= lastLine; y++) {
                 for (uint32 x = 0; x < lineWidth; x++)
                     UpdatePixel<flipX, flipY, swapXY>(
-                        destBuffer, frame, x, y, static_cast<T*>(this)->palette[nibbler.nibble()]);
+                        destBuffer, frame, x, y,
+                        FromPalette(static_cast<T*>(this)->palette[nibbler.nibble()]));
 
                 if constexpr (!trivialPitch) nibbler.skipBytes(pitchDelta);
             }
@@ -193,7 +223,8 @@ bool MediaQFramebuffer<T>::DecodeFrame(Frame& frame, uint32 rowBytes, uint32 bpp
             for (uint32 y = firstLine; y <= lastLine; y++) {
                 for (uint32 x = 0; x < lineWidth; x++)
                     UpdatePixel<flipX, flipY, swapXY>(
-                        destBuffer, frame, x, y, static_cast<T*>(this)->palette[nibbler.nibble()]);
+                        destBuffer, frame, x, y,
+                        FromPalette(static_cast<T*>(this)->palette[nibbler.nibble()]));
 
                 if constexpr (!trivialPitch) nibbler.skipBytes(pitchDelta);
             }
@@ -211,7 +242,8 @@ bool MediaQFramebuffer<T>::DecodeFrame(Frame& frame, uint32 rowBytes, uint32 bpp
             for (uint32 y = firstLine; y <= lastLine; y++) {
                 for (uint32 x = 0; x < lineWidth; x++)
                     UpdatePixel<flipX, flipY, swapXY>(
-                        destBuffer, frame, x, y, static_cast<T*>(this)->palette[nibbler.nibble()]);
+                        destBuffer, frame, x, y,
+                        FromPalette(static_cast<T*>(this)->palette[nibbler.nibble()]));
 
                 if constexpr (!trivialPitch) nibbler.skipBytes(pitchDelta);
             }
@@ -222,6 +254,10 @@ bool MediaQFramebuffer<T>::DecodeFrame(Frame& frame, uint32 rowBytes, uint32 bpp
         case 8: {
             static_cast<T*>(this)->PrvUpdatePalette();
 
+            // Convert the palette once per frame instead of once per pixel.
+            Pixel palette[256];
+            for (int i = 0; i < 256; i++) palette[i] = FromPalette(static_cast<T*>(this)->palette[i]);
+
             uint8* srcBuffer =
                 static_cast<T*>(this)->framebuffer.GetRealAddress(baseAddr + firstLine * rowBytes);
 
@@ -229,8 +265,7 @@ bool MediaQFramebuffer<T>::DecodeFrame(Frame& frame, uint32 rowBytes, uint32 bpp
                 for (uint32 x = 0; x < lineWidth; x++)
                     // Pixels are arranged in LE words in the framebuffer, so byteswap
                     UpdatePixel<flipX, flipY, swapXY>(
-                        destBuffer, frame, x, y,
-                        static_cast<T*>(this)->palette[*(uint8*)((uintptr_t)(srcBuffer++) ^ 1)]);
+                        destBuffer, frame, x, y, palette[*(uint8*)((uintptr_t)(srcBuffer++) ^ 1)]);
 
                 if constexpr (!trivialPitch) srcBuffer += pitchDelta;
             }
@@ -254,19 +289,7 @@ bool MediaQFramebuffer<T>::DecodeFrame(Frame& frame, uint32 rowBytes, uint32 bpp
 
                     p = (p1 << 8) | p2;
 
-                    // Shift the bits around, forming RRRRRrrr, GGGGGGgg, and
-                    // BBBBBbbb values, where the lower-case bits are copies of
-                    // the least significant bits in the upper-case bits.
-                    //
-                    // Note that all of this could also be done with three 64K
-                    // lookup tables.  If speed is an issue, we might want to
-                    // investigate that.
-
-                    UpdatePixel<flipX, flipY, swapXY>(
-                        destBuffer, frame, x, y,
-                        0xff000000 | ((((p << 3) & 0xF8) | ((p >> 0) & 0x07)) << 16) |
-                            ((((p >> 3) & 0xFC) | ((p >> 5) & 0x03)) << 8) |
-                            (((p >> 8) & 0xF8) | ((p >> 11) & 0x07)));
+                    UpdatePixel<flipX, flipY, swapXY>(destBuffer, frame, x, y, FromRgb565(p));
                 }
 
                 if constexpr (!trivialPitch) srcBuffer += pitchDelta;
@@ -280,8 +303,8 @@ bool MediaQFramebuffer<T>::DecodeFrame(Frame& frame, uint32 rowBytes, uint32 bpp
 
 template <class T>
 template <bool flipX, bool flipY, bool swapXY>
-void MediaQFramebuffer<T>::UpdatePixel(uint32*& destBuffer, Frame& frame, uint32 x, uint32 y,
-                                       uint32 value) {
+void MediaQFramebuffer<T>::UpdatePixel(Pixel*& destBuffer, Frame& frame, uint32 x, uint32 y,
+                                       Pixel value) {
     // No transformation? -> stream pixels to the destination in ascending direction
     if constexpr (!flipX && !flipY && !swapXY) {
         *(destBuffer++) = value;

@@ -73,6 +73,8 @@ class EmRegsVZ : public EmRegs, public EmHALHandler {
 
     virtual uint32 CyclesToNextInterrupt(uint64 systemCycles);
     inline void Cycle(uint64 systemCycles, Bool sleeping);
+    void SyncSystemCycles();
+    void PublishNextCycleEvent();
 
     virtual void SetUARTSync(bool sync);
 
@@ -150,6 +152,7 @@ class EmRegsVZ : public EmRegs, public EmHALHandler {
     uint32 spiTestRead(emuptr address, int size);
 
     void UpdateTimers();
+    void UpdateTimersImpl();
     void DispatchPwmChange();
     void HandleDayRollover();
 

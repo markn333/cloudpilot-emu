@@ -19,6 +19,7 @@
 #include "EmCommon.h"
 #include "EmRegsFrameBuffer.h"
 #include "EmSession.h"
+#include "EmMemory.h"
 #include "EmSystemState.h"
 #include "Frame.h"
 #include "Logging.h"  // LogAppendMsg
@@ -1165,6 +1166,9 @@ EmRegsMediaQ11xx::~EmRegsMediaQ11xx(void) {}
 
 void EmRegsMediaQ11xx::Initialize(void) {
     EmRegs::Initialize();
+#if defined(ESP_PLATFORM)
+    fFbHost = nullptr;
+#endif
 
     paletteDirty = true;
     WRITE_REGISTER(dcREG[0x03], 0x00000040);
@@ -3244,11 +3248,56 @@ uint16 EmRegsMediaQ11xx::PrvAdjustPixel(uint16 pattern, uint16 src, uint16 dest,
 //		� EmRegsMediaQ11xx::PrvSetPixel
 // ---------------------------------------------------------------------------
 
-inline void EmRegsMediaQ11xx::PrvSetPixel(uint16 pixel, uint16 x, uint16 y) {
+#if defined(ESP_PLATFORM)
+__attribute__((always_inline)) inline uint8* EmRegsMediaQ11xx::PrvGetPixelHost(
+    emuptr pixelLocation, uint32 bytesPerPixel) {
+    if (unlikely(fFbHost == nullptr)) {
+        fFbSize = EmMemory::GetRegionSize(MemoryRegion::framebuffer);
+        fFbDirty = EmMemory::GetDirtyPagesForRegion(MemoryRegion::framebuffer);
+        fFbHost = framebuffer.GetRealAddress(this->GetFrameBufferBase());
+    }
+
+    const uint32 offset = pixelLocation - this->GetFrameBufferBase();
+    if (offset + bytesPerPixel > fFbSize) return nullptr;
+
+    return fFbHost + offset;
+}
+#endif
+
+__attribute__((always_inline)) inline void EmRegsMediaQ11xx::PrvSetPixel(uint16 pixel, uint16 x,
+                                                                          uint16 y) {
     emuptr pixelLocation = this->PrvGetPixelLocation(x, y);
     if ((pixelLocation - this->GetFrameBufferBase()) > MMIO_OFFSET) {
         return;
     }
+
+#if defined(ESP_PLATFORM)
+    // PalmCYD: store straight into the framebuffer and do what EmRegsFrameBuffer::SetByte /
+    // SetWord do (screen and page dirty marks) instead of going through the memory handlers
+    // for every pixel of a blit.
+    if (fState.colorDepth == kColorDepth8 || fState.colorDepth == kColorDepth16) {
+        const uint32 bytesPerPixel = fState.colorDepth == kColorDepth8 ? 1 : 2;
+        // Unaligned pixels keep going through the memory handlers (address error as before).
+        uint8* host = (pixelLocation & (bytesPerPixel - 1)) == 0
+                          ? this->PrvGetPixelHost(pixelLocation, bytesPerPixel)
+                          : nullptr;
+
+        if (host != nullptr) {
+            if (bytesPerPixel == 1) {
+                EmMemDoPut8(host, pixel);
+                gSystemState.MarkScreenDirty(pixelLocation, pixelLocation);
+            } else {
+                EmMemDoPut16(host, pixel);
+                gSystemState.MarkScreenDirty(pixelLocation, pixelLocation + 2);
+            }
+
+            const uint32 offset = pixelLocation - this->GetFrameBufferBase();
+            EmMemMarkRamDirty(fFbDirty, offset);
+
+            return;
+        }
+    }
+#endif
 
     switch (fState.colorDepth) {
         case kColorDepth8:
@@ -3268,12 +3317,25 @@ inline void EmRegsMediaQ11xx::PrvSetPixel(uint16 pixel, uint16 x, uint16 y) {
 //		� EmRegsMediaQ11xx::PrvGetPixel
 // ---------------------------------------------------------------------------
 
-inline uint16 EmRegsMediaQ11xx::PrvGetPixel(uint16 x, uint16 y) {
+__attribute__((always_inline)) inline uint16 EmRegsMediaQ11xx::PrvGetPixel(uint16 x, uint16 y) {
     uint16 result;
     emuptr pixelLocation = this->PrvGetPixelLocation(x, y);
     if ((pixelLocation - this->GetFrameBufferBase()) > MMIO_OFFSET) {
         return 0;
     }
+
+#if defined(ESP_PLATFORM)
+    // PalmCYD: read straight from the framebuffer (see PrvSetPixel).
+    if (fState.colorDepth == kColorDepth8 || fState.colorDepth == kColorDepth16) {
+        const uint32 bytesPerPixel = fState.colorDepth == kColorDepth8 ? 1 : 2;
+        const uint8* host = (pixelLocation & (bytesPerPixel - 1)) == 0
+                                ? this->PrvGetPixelHost(pixelLocation, bytesPerPixel)
+                                : nullptr;
+
+        if (host != nullptr)
+            return bytesPerPixel == 1 ? EmMemDoGet8((void*)host) : EmMemDoGet16((void*)host);
+    }
+#endif
 
     switch (fState.colorDepth) {
         case kColorDepth8:
@@ -3297,7 +3359,8 @@ inline uint16 EmRegsMediaQ11xx::PrvGetPixel(uint16 x, uint16 y) {
 //		� EmRegsMediaQ11xx::PrvGetPixelLocation
 // ---------------------------------------------------------------------------
 
-inline emuptr EmRegsMediaQ11xx::PrvGetPixelLocation(uint16 x, uint16 y) {
+__attribute__((always_inline)) inline emuptr EmRegsMediaQ11xx::PrvGetPixelLocation(uint16 x,
+                                                                                     uint16 y) {
     int bytesPerPixel;
 
     switch (fState.colorDepth) {

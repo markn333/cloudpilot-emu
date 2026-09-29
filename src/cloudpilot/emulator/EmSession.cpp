@@ -322,6 +322,10 @@ void EmSession::ScheduleReset(ResetType resetType) {
 }
 
 void EmSession::Reset(ResetType resetType) {
+#if defined(ESP_PLATFORM) && defined(PALMCYD_TRACE)
+    printf("EmSession::Reset(%d)\n", static_cast<int>(resetType));
+#endif
+
     EmAssert(cpu);
     EmAssert(nestLevel == 0);
 

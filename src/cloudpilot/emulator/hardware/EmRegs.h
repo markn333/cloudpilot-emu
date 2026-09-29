@@ -58,6 +58,11 @@ class EmRegs {
 
     virtual bool AllowUnalignedAccess(emuptr address, int size);
 
+    // PalmCYD: if the 64KB bank at base is plain memory whose writes only need the dirty page
+    // bitmap and the screen dirty marking (a framebuffer), return its host address and set
+    // *dirtyPages / *phy (offset for the bitmap) so the memory caches can access it directly.
+    virtual uint8* GetCacheableHost(emuptr base, uint8** dirtyPages, emuptr* phy) { return nullptr; }
+
    protected:
     typedef uint32 (EmRegs::*ReadFunction)(emuptr address, int size);
     typedef void (EmRegs::*WriteFunction)(emuptr address, int size, uint32 value);
@@ -78,8 +83,20 @@ class EmRegs {
     typedef vector<ReadFunction> ReadFunctionList;
     typedef vector<WriteFunction> WriteFunctionList;
 
-    ReadFunctionList fReadFunctions;
-    WriteFunctionList fWriteFunctions;
+    // PalmCYD: the handlers are kept as a list of distinct (read, write) pairs plus one byte
+    // per address that selects the pair. A pair of member function pointers per address
+    // (16 bytes) took several MB for the large register ranges of the CLIE devices
+    // (MediaQ framebuffer 256KB, Sony DSP 64KB).
+    ReadFunctionList fReadFunctions;    // distinct pairs: read handler
+    WriteFunctionList fWriteFunctions;  // distinct pairs: write handler
+    vector<uint8> fHandlerIndex;        // per address: index into the pair lists
+
+    ReadFunction ReadHandlerAt(unsigned long offset) const {
+        return fReadFunctions[fHandlerIndex[offset]];
+    }
+    WriteFunction WriteHandlerAt(unsigned long offset) const {
+        return fWriteFunctions[fHandlerIndex[offset]];
+    }
 };
 
 using EmRegsList = vector<EmRegs*>;

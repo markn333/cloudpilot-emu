@@ -38,12 +38,18 @@ class EmBankROM {
     static void AddOpcodeCycles(void);
 
     static emuptr GetMemoryStart(void) { return gROMMemoryStart; }
+
+    // PalmCYD (ESP32): the ROM image passed to Initialize is already byteswapped
+    // (ByteswapWords) and lives in memory-mapped flash. It is used in place instead of
+    // being copied, and never written or freed. Call before EmSession::Initialize.
+    static void SetPreswappedImage(bool preswapped);
     static uint32 GetRomSize();
 
    private:
     static void AddressError(emuptr address, long size, Bool forRead);
     static void InvalidAccess(emuptr address, long size, Bool forRead);
     static bool LoadROM(size_t len, const uint8* buffer);
+    static bool LoadROMPreswapped(size_t len, const uint8* buffer);
 
     static emuptr gROMMemoryStart;
 };
