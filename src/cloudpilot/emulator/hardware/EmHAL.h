@@ -113,6 +113,9 @@ class EmHAL {
 
     static EmEvent<> onSystemClockChange;
     static EmEvent<double, double> onPwmChange;
+    // PalmCYD: backlight brightness set by the device (level, number of levels). Only the
+    // CLIE PEG-N700C reports it (digital potentiometer on port C).
+    static EmEvent<int, int> onBacklightLevelChange;
     static EmEvent<> onDayRollover;
 
    private:

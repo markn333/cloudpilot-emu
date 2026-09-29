@@ -23,6 +23,13 @@
 #define hwrVZPEG700PortCKbdRow0 0x01
 #define hwrVZPEG700PortCKbdRow1 0x02
 #define hwrVZPEG700PortCKbdRow2 0x04
+// Backlight brightness: a 3-wire digital potentiometer (found by tracing the brightness slider,
+// 2026-09-29). Bit 5 selects it (low active), bit 6 is the direction and every rising
+// edge of bit 7 moves it one step. About 32 steps from brightest to darkest. Bit 6 = 1 makes it
+// brighter (checked on the device: the other way round was reversed).
+#define hwrVZPEG700PortCBacklightCS 0x20
+#define hwrVZPEG700PortCBacklightUp 0x40
+#define hwrVZPEG700PortCBacklightStep 0x80
 
 // Port D Bit settings for HiRez_CLIE
 #define hwrVZPEG700PortDKbdCol0 0x01
@@ -80,6 +87,24 @@ Bool EmRegsVzPegN700C::GetLCDScreenOn(void) {
     UInt8 portKData = READ_REGISTER(portKData);
     return (portKData & hwrVZPEG700PortKLCDPowered) != 0;
     //	return true;
+}
+
+// ---------------------------------------------------------------------------
+//		� EmRegsVzPegN700C::PortDataChanged
+// ---------------------------------------------------------------------------
+
+void EmRegsVzPegN700C::PortDataChanged(int port, uint8 oldValue, uint8 newValue) {
+    EmRegsVZNoScreen::PortDataChanged(port, oldValue, newValue);
+
+    if (port != 'C') return;
+    if ((newValue & hwrVZPEG700PortCBacklightCS) != 0) return;
+    if ((newValue & ~oldValue & hwrVZPEG700PortCBacklightStep) == 0) return;
+
+    const int level = (newValue & hwrVZPEG700PortCBacklightUp) ? fBacklightLevel + 1 : fBacklightLevel - 1;
+    if (level < 0 || level >= kBacklightLevels) return;
+
+    fBacklightLevel = level;
+    EmHAL::onBacklightLevelChange.Dispatch(fBacklightLevel, kBacklightLevels);
 }
 
 // ---------------------------------------------------------------------------

@@ -25,8 +25,14 @@ class EmRegsVzPegN700C : public EmRegsVZNoScreen {
    protected:
     virtual EmSPISlave* GetSPI2Slave(void);
     virtual void portDIntReqEnWrite(emuptr address, int size, uint32 value);
+    virtual void PortDataChanged(int port, uint8 oldValue, uint8 newValue);
+
+    // PalmCYD: backlight brightness (digital potentiometer on port C, see PortDataChanged)
+    static constexpr int kBacklightLevels = 32;
 
    private:
+    int fBacklightLevel{kBacklightLevels - 1};
+
     EmSPISlave* fSPISlaveADC;
     EmRegsSonyDSP& dsp;
 };

@@ -13,6 +13,10 @@
 
 #include "EmRegsVZ.h"
 
+#if defined(ESP_PLATFORM) && defined(PALMCYD_TRACE)
+    #include "esp_timer.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 
@@ -831,9 +835,15 @@ void EmRegsVZ::SetSubBankHandlers(void) {
     INSTALL_HANDLER(StdRead, pwmp1Write, pwmPeriod);
     INSTALL_HANDLER(StdRead, NullWrite, pwmCounter);
 
+#if defined(ESP_PLATFORM) && defined(PALMCYD_TRACE)
+    INSTALL_HANDLER(StdRead, traceWrite, pwm2Control);
+    INSTALL_HANDLER(StdRead, traceWrite, pwm2Period);
+    INSTALL_HANDLER(StdRead, traceWrite, pwm2Width);
+#else
     INSTALL_HANDLER(StdRead, StdWrite, pwm2Control);
     INSTALL_HANDLER(StdRead, StdWrite, pwm2Period);
     INSTALL_HANDLER(StdRead, StdWrite, pwm2Width);
+#endif
     INSTALL_HANDLER(StdRead, NullWrite, pwm2Counter);
 
     INSTALL_HANDLER(StdRead, tmrRegisterWrite, tmr1Control);
@@ -892,7 +902,11 @@ void EmRegsVZ::SetSubBankHandlers(void) {
     INSTALL_HANDLER(StdRead, lcdRegisterWrite, lcdPanningOffset);
     INSTALL_HANDLER(StdRead, StdWrite, lcdFrameRate);
     INSTALL_HANDLER(StdRead, lcdRegisterWrite, lcdGrayPalette);
+#if defined(ESP_PLATFORM) && defined(PALMCYD_TRACE)
+    INSTALL_HANDLER(StdRead, traceWrite, lcdContrastControlPWM);
+#else
     INSTALL_HANDLER(StdRead, StdWrite, lcdContrastControlPWM);
+#endif
     INSTALL_HANDLER(StdRead, StdWrite, lcdRefreshModeControl);
     INSTALL_HANDLER(StdRead, StdWrite, lcdDMAControl);
 
@@ -1909,10 +1923,23 @@ void EmRegsVZ::intStatusHiWrite(emuptr address, int size, uint32 value) {
 //		� EmRegsVZ::portXDataWrite
 // ---------------------------------------------------------------------------
 
+#if defined(ESP_PLATFORM) && defined(PALMCYD_TRACE)
+// PalmCYD (bring-up): log writes to registers whose meaning we are looking for.
+void EmRegsVZ::traceWrite(emuptr address, int size, uint32 value) {
+    printf("PalmCYD reg write %08lx size %d value %08lx\n", (unsigned long)address, size, (unsigned long)value);
+    StdWrite(address, size, value);
+}
+#endif
+
 void EmRegsVZ::portXDataWrite(emuptr address, int size, uint32 value) {
     // Get the old value before updating it.
 
     uint8 oldValue = StdRead(address, size);
+#if defined(ESP_PLATFORM) && defined(PALMCYD_TRACE)
+    if ((oldValue ^ value) & 0xFF)
+        printf("PalmCYD port write %08lx %02x -> %02x @%lld\n", (unsigned long)address, oldValue,
+               (unsigned)(value & 0xFF), (long long)(esp_timer_get_time() / 1000));
+#endif
 
     // Take a snapshot of the line driver states.
 

@@ -41,6 +41,7 @@ EmHALHandler* EmHAL::fgRootHandler;
 
 EmEvent<> EmHAL::onSystemClockChange{};
 EmEvent<double, double> EmHAL::onPwmChange{};
+EmEvent<int, int> EmHAL::onBacklightLevelChange{};
 EmEvent<> EmHAL::onDayRollover{};
 
 vector<EmHAL::CycleConsumer> EmHAL::cycleConsumers;

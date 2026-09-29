@@ -141,6 +141,9 @@ class EmRegsVZ : public EmRegs, public EmHALHandler {
     void rtcIntStatusWrite(emuptr address, int size, uint32 value);
     void rtcIntEnableWrite(emuptr address, int size, uint32 value);
     void pwmc1Write(emuptr address, int size, uint32 value);
+#if defined(ESP_PLATFORM) && defined(PALMCYD_TRACE)
+    void traceWrite(emuptr address, int size, uint32 value);
+#endif
     void pwms1Write(emuptr address, int size, uint32 value);
     void pwmp1Write(emuptr address, int size, uint32 value);
 
