@@ -289,6 +289,10 @@ class EmRegsMediaQ11xx : public EmRegs, public MediaQFramebuffer<EmRegsMediaQ11x
     // completely inside it (then the pixel goes through the memory handlers as before).
     uint8* PrvGetPixelHost(emuptr pixelLocation, uint32 bytesPerPixel);
 
+    // Solid rectangle fill (pattern copy with a solid pattern), done a row at a time. Returns
+    // false if the blit is not one it handles (then the pixel pipeline runs as before).
+    bool PrvFastSolidFill();
+
     // The framebuffer region (host address, size, dirty page bitmap), looked up on first use.
     uint8* fFbHost{nullptr};
     uint8* fFbDirty{nullptr};

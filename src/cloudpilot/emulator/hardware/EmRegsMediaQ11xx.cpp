@@ -3420,10 +3420,52 @@ __attribute__((always_inline)) inline emuptr EmRegsMediaQ11xx::PrvGetPixelLocati
 //		� EmRegsMediaQ11xx::PrvIncBlitterInit
 // ---------------------------------------------------------------------------
 
+#if defined(ESP_PLATFORM) && defined(PALMCYD_BLIT_STATS)
+namespace {
+    // PalmCYD (measurement only): pixels per blit mode, printed every 256 blits.
+    struct BlitStat {
+        uint32 key;
+        uint32 blits;
+        uint32 pixels;
+    };
+    BlitStat blitStats[48];
+    uint32 blitCount = 0;
+
+    void CountBlit(uint32 key, uint32 pixels) {
+        for (auto& st : blitStats) {
+            if (st.blits == 0) st.key = key;
+            if (st.key != key) continue;
+            st.blits++;
+            st.pixels += pixels;
+            break;
+        }
+        if (++blitCount % 256 != 0) return;
+        printf("PalmCYD blit stats (rop cmd sys monoS monoP colT monoT m2s solidS solidP clip depth rot):\n");
+        for (auto& st : blitStats) {
+            if (st.blits == 0) break;
+            printf("  %08lx blits %lu pixels %lu\n", (unsigned long)st.key, (unsigned long)st.blits,
+                   (unsigned long)st.pixels);
+            st.blits = st.pixels = 0;
+        }
+    }
+}  // namespace
+#endif
+
 void EmRegsMediaQ11xx::PrvIncBlitterInit(void) {
     PRINTF_BLIT(
         "	PrvIncBlitterInit:	"
         "&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&");
+
+#if defined(ESP_PLATFORM) && defined(PALMCYD_BLIT_STATS)
+    CountBlit((uint32)fState.rasterOperation << 24 | (uint32)(fState.commandType & 7) << 20 |
+                  (uint32)(fState.systemMemory & 1) << 19 | (uint32)(fState.monoSource & 1) << 18 |
+                  (uint32)(fState.monoPattern & 1) << 17 | (uint32)(fState.colorTransEnable & 1) << 16 |
+                  (uint32)(fState.monoTransEnable & 1) << 15 | (uint32)(fState.memToScreen & 1) << 14 |
+                  (uint32)(fState.solidSourceColor & 1) << 13 | (uint32)(fState.solidPattern & 1) << 12 |
+                  (uint32)(fState.clipEnable & 1) << 11 | (uint32)(fState.colorDepth & 7) << 8 |
+                  (uint32)(fState.rotate90 & 1) << 7,
+              (uint32)fState.width * fState.height);
+#endif
 
 #if LOG_BLIT
     this->PrvLogGEState();
@@ -3487,8 +3529,78 @@ void EmRegsMediaQ11xx::PrvIncBlitterInit(void) {
 //		� EmRegsMediaQ11xx::PrvIncBlitterRun
 // ---------------------------------------------------------------------------
 
+#if defined(ESP_PLATFORM)
+// ---------------------------------------------------------------------------
+//		� EmRegsMediaQ11xx::PrvFastSolidFill
+// ---------------------------------------------------------------------------
+// PalmCYD: on the N700C about 90% of the blitted pixels are solid fills (ROP 0xF0 = pattern
+// copy with a solid pattern: clearing windows and rectangles). The pixel pipeline computes
+// source, pattern, destination, ROP, transparency and the pixel address for every pixel; for a
+// solid fill the result is just the pattern color in a rectangle.
+
+bool EmRegsMediaQ11xx::PrvFastSolidFill() {
+    if (fState.rasterOperation != 0xF0 || !fState.solidPattern || fUsesSource) return false;
+    if (fState.colorTransEnable || fState.monoTransEnable || fState.clipEnable || fState.rotate90)
+        return false;
+    if (fState.colorDepth != kColorDepth8 && fState.colorDepth != kColorDepth16) return false;
+    if (fState.width == 0 || fState.height == 0) return false;
+
+    const uint32 bytesPerPixel = fState.colorDepth == kColorDepth8 ? 1 : 2;
+
+    // The rectangle the pixel pipeline would cover (see PrvDestPipeInit / NextX / NextY).
+    int32 x0 = fState.xDest, y0 = fState.yDest;
+    if (fState.xyConversion && fState.xDirection) x0 += fState.width - 1;
+    if (fState.xyConversion && fState.yDirection) y0 += fState.height - 1;
+    const int32 xMin = fState.xDirection ? x0 - (fState.width - 1) : x0;
+    const int32 yMin = fState.yDirection ? y0 - (fState.height - 1) : y0;
+    if (xMin < 0 || yMin < 0 || xMin + fState.width > 0xFFFF || yMin + fState.height > 0xFFFF) return false;
+
+    // Every pixel must be inside the framebuffer and aligned (otherwise the pipeline handles it).
+    const emuptr first = this->PrvGetPixelLocation(xMin, yMin);
+    const emuptr last = this->PrvGetPixelLocation(xMin + fState.width - 1, yMin + fState.height - 1);
+    if ((first & (bytesPerPixel - 1)) != 0 || (fState.destLineStride & (bytesPerPixel - 1)) != 0) return false;
+    if (this->PrvGetPixelHost(first, bytesPerPixel) == nullptr ||
+        this->PrvGetPixelHost(last, bytesPerPixel) == nullptr || last < first)
+        return false;
+
+    const uint16 color = fState.fgColorMonoPat;
+    const emuptr fbBase = this->GetFrameBufferBase();
+
+    for (uint32 row = 0; row < fState.height; row++) {
+        const emuptr rowStart = this->PrvGetPixelLocation(xMin, yMin + row);
+        const emuptr rowEnd = rowStart + fState.width * bytesPerPixel;  // exclusive
+        uint8* host = this->PrvGetPixelHost(rowStart, bytesPerPixel);
+
+        if (bytesPerPixel == 2) {
+            for (uint32 x = 0; x < fState.width; x++) EmMemDoPut16(host + 2 * x, color);
+        } else {
+            // Bytes are stored swapped within each 16-bit word, but all bytes are the same
+            // here: only the odd start / end bytes need the swapped address.
+            emuptr a = rowStart;
+            if (a & 1) EmMemDoPut8(this->PrvGetPixelHost(a++, 1), color);
+            const emuptr alignedEnd = rowEnd & ~(emuptr)1;
+            if (alignedEnd > a) memset(this->PrvGetPixelHost(a, 1), color & 0xFF, alignedEnd - a);
+            if (rowEnd & 1) EmMemDoPut8(this->PrvGetPixelHost(rowEnd - 1, 1), color);
+        }
+
+        gSystemState.MarkScreenDirty(rowStart, rowEnd);
+        for (emuptr offset = (rowStart - fbBase) & ~(emuptr)0x3FF; offset < rowEnd - fbBase; offset += 0x400)
+            EmMemMarkRamDirty(fFbDirty, offset);
+    }
+
+    return true;
+}
+#endif
+
 void EmRegsMediaQ11xx::PrvIncBlitterRun(void) {
     if (!fBlitInProgress) return;
+
+#if defined(ESP_PLATFORM)
+    if (fCurXOffset == 0 && fCurYOffset == 0 && this->PrvFastSolidFill()) {
+        fBlitInProgress = false;
+        return;
+    }
+#endif
 
 #ifdef LOGGING
     static long counter = 0;
