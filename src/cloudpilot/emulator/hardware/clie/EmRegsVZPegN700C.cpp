@@ -89,6 +89,12 @@ Bool EmRegsVzPegN700C::GetLCDScreenOn(void) {
     //	return true;
 }
 
+int EmRegsVzPegN700C::sInitialBacklightLevel = EmRegsVzPegN700C::kBacklightLevels - 1;
+
+void EmRegsVzPegN700C::SetInitialBacklightLevel(int level) {
+    if (level >= 0 && level < kBacklightLevels) sInitialBacklightLevel = level;
+}
+
 // ---------------------------------------------------------------------------
 //		� EmRegsVzPegN700C::PortDataChanged
 // ---------------------------------------------------------------------------

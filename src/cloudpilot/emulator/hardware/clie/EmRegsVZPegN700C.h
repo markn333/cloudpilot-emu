@@ -11,6 +11,12 @@ class EmRegsVzPegN700C : public EmRegsVZNoScreen {
     virtual ~EmRegsVzPegN700C();
 
    public:
+    // PalmCYD: backlight brightness (digital potentiometer on port C, see PortDataChanged)
+    static constexpr int kBacklightLevels = 32;
+    // The level the potentiometer starts at (it is not part of the savestate; the host keeps the
+    // last level and sets it before the session is created).
+    static void SetInitialBacklightLevel(int level);
+
     virtual Bool GetLCDScreenOn(void);
     virtual Bool GetLCDBacklightOn(void);
     virtual uint16 GetLEDState(void);
@@ -27,11 +33,10 @@ class EmRegsVzPegN700C : public EmRegsVZNoScreen {
     virtual void portDIntReqEnWrite(emuptr address, int size, uint32 value);
     virtual void PortDataChanged(int port, uint8 oldValue, uint8 newValue);
 
-    // PalmCYD: backlight brightness (digital potentiometer on port C, see PortDataChanged)
-    static constexpr int kBacklightLevels = 32;
 
    private:
-    int fBacklightLevel{kBacklightLevels - 1};
+    static int sInitialBacklightLevel;
+    int fBacklightLevel{sInitialBacklightLevel};
 
     EmSPISlave* fSPISlaveADC;
     EmRegsSonyDSP& dsp;
