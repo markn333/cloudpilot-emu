@@ -54,14 +54,61 @@ constexpr uint32 SAVESTATE_VERSION = 1;
 int areg_byteinc[] = {1, 1, 1, 1, 1, 1, 1, 2};  // (normally in newcpu.c)
 int imm8_table[] = {8, 1, 2, 3, 4, 5, 6, 7};    // (normally in newcpu.c)
 
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+namespace {
+    // movem_index1[i]: lowest set bit of i (8 if none), movem_index2[i] = 7 - index1,
+    // movem_next[i] = i without that bit. The same values the loop in InitializeUAETables makes.
+    struct MovemTables {
+        int index1[256], index2[256], next[256];
+    };
+    constexpr MovemTables MakeMovemTables() {
+        MovemTables t{};
+        for (int i = 0; i < 256; i++) {
+            int j = 0;
+            while (j < 8 && !(i & (1 << j))) j++;
+            t.index1[i] = j;
+            t.index2[i] = 7 - j;
+            t.next[i] = i & ~(1 << j);
+        }
+        return t;
+    }
+    constexpr MovemTables kMovem = MakeMovemTables();
+}  // namespace
+extern "C" {
+const int movem_index1[256] = {
+#define M(i) kMovem.index1[i]
+#define M4(i) M(i), M(i + 1), M(i + 2), M(i + 3)
+#define M16(i) M4(i), M4(i + 4), M4(i + 8), M4(i + 12)
+#define M64(i) M16(i), M16(i + 16), M16(i + 32), M16(i + 48)
+    M64(0), M64(64), M64(128), M64(192)};
+#undef M
+#define M(i) kMovem.index2[i]
+const int movem_index2[256] = {M64(0), M64(64), M64(128), M64(192)};
+#undef M
+#define M(i) kMovem.next[i]
+const int movem_next[256] = {M64(0), M64(64), M64(128), M64(192)};
+#undef M
+#undef M4
+#undef M16
+#undef M64
+}
+#else
 int movem_index1[256];  // (normally in newcpu.c)
 int movem_index2[256];  // (normally in newcpu.c)
 int movem_next[256];    // (normally in newcpu.c)
+#endif
 
 #ifdef __EMSCRIPTEN__
 cpuop_func* cpufunctbl_base;
 #elif defined(ESP_PLATFORM)
 cpuop_func** cpufunctbl = nullptr;  // PalmCYD: 256KB のため起動時に確保（内部 RAM に入らない）
+
+#if defined(PALMCYD_CONST_CPUFUNCTBL) || defined(PALMCYD_VERIFY_CPUFUNCTBL)
+// PalmCYD: the same table generated on the PC (tools/gen_cpufunctbl.py, uae/cpufunctbl_const.c)
+// and kept in flash. The classic ESP32 (no PSRAM) cannot build it at start-up (read_table68k
+// needs about 1MB).
+extern "C" cpuop_func* const cpufunctbl_const[65536];
+#endif
 #else
 cpuop_func* cpufunctbl[65536];  // (normally in newcpu.c)
 #endif
@@ -1166,6 +1213,7 @@ void EmCPU68K::InitializeUAETables(void) {
 
     int i, j;
 
+#if !defined(PALMCYD_TWO_LEVEL_BANKS)
     for (i = 0; i < 256; i++) {
         for (j = 0; j < 8; j++) {
             if (i & (1 << j)) {
@@ -1177,7 +1225,12 @@ void EmCPU68K::InitializeUAETables(void) {
         movem_index2[i] = 7 - j;
         movem_next[i] = i & (~(1 << j));
     }
+#endif
 
+#if defined(PALMCYD_CONST_CPUFUNCTBL)
+    // The table and its sources (op_smalltbl_3, defs68k) stay out of RAM: nothing below is built.
+    cpufunctbl = const_cast<cpuop_func**>(cpufunctbl_const);
+#else
     read_table68k();
     do_merges();
 
@@ -1256,4 +1309,13 @@ void EmCPU68K::InitializeUAETables(void) {
     // (hey readcpu doesn't free this guy!)
 
     Platform::DisposeMemory(table68k);
+
+#if defined(PALMCYD_VERIFY_CPUFUNCTBL)
+    // PalmCYD: check that the table generated on the PC equals the one built here.
+    int mismatches = 0;
+    for (opcode = 0; opcode < 65536; opcode++)
+        if (cpufunctbl[opcode] != cpufunctbl_const[opcode]) mismatches++;
+    printf("PalmCYD cpufunctbl_const: %d mismatches\n", mismatches);
+#endif
+#endif  // !PALMCYD_CONST_CPUFUNCTBL
 }

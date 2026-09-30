@@ -13,6 +13,10 @@
 
 #include "EmMemory.h"
 
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+    #include "esp_heap_caps.h"
+#endif
+
 #include <array>
 
 #include "EmBankDRAM.h"    // EmBankDRAM::Initialize
@@ -189,7 +193,56 @@
 
 #pragma mark Globals
 
-#if defined(ESP_PLATFORM)
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+EmAddressBank*** gEmMemBanksL1 = nullptr;
+extern "C" void* gPalmCydReservedMemory = nullptr;
+
+namespace {
+    // Uniform second-level arrays (all 256 entries the same bank), one per bank, kept for reuse.
+    constexpr int kMaxUniform = 8;
+    EmAddressBank* uniformBank[kMaxUniform];
+    EmAddressBank** uniformArray[kMaxUniform];
+    // Second-level arrays of mixed blocks, one per block, allocated on first use and kept.
+    EmAddressBank** privateArray[256];
+
+    EmAddressBank** UniformFor(EmAddressBank* bank) {
+        for (int i = 0; i < kMaxUniform; i++) {
+            if (uniformArray[i] && uniformBank[i] == bank) return uniformArray[i];
+            if (!uniformArray[i]) {
+                uniformArray[i] = static_cast<EmAddressBank**>(EmMemAllocate32(256 * sizeof(EmAddressBank*)));
+                uniformBank[i] = bank;
+                for (int k = 0; k < 256; k++) uniformArray[i][k] = bank;
+                return uniformArray[i];
+            }
+        }
+        return nullptr;
+    }
+
+    // The block's own array, filled with its current contents if it was uniform.
+    EmAddressBank** PrivateFor(uint32 block) {
+        EmAddressBank** current = gEmMemBanksL1[block];
+        if (current == privateArray[block] && current) return current;
+        if (!privateArray[block]) {
+            privateArray[block] = static_cast<EmAddressBank**>(EmMemAllocate32(256 * sizeof(EmAddressBank*)));
+        }
+        for (int k = 0; k < 256; k++) privateArray[block][k] = current ? current[k] : nullptr;
+        gEmMemBanksL1[block] = privateArray[block];
+        return privateArray[block];
+    }
+}  // namespace
+
+void EmMemSetBankSlot(uint32 index, EmAddressBank* bank) { PrivateFor(index >> 8)[index & 0xFF] = bank; }
+
+namespace {
+    // Before the banks are set up every block points to all-null banks (like the calloc'ed table).
+    void ResetBankTable() {
+        if (!gEmMemBanksL1) gEmMemBanksL1 = static_cast<EmAddressBank***>(EmMemAllocate32(256 * sizeof(EmAddressBank**)));
+        EmAddressBank** empty = UniformFor(nullptr);
+        if (!empty) abort();
+        for (int i = 0; i < 256; i++) gEmMemBanksL1[i] = empty;
+    }
+}  // namespace
+#elif defined(ESP_PLATFORM)
 EmAddressBank** gEmMemBanks = nullptr;  // PalmCYD: Memory::Initialize で確保
 #else
 EmAddressBank* gEmMemBanks[65536];  // (normally defined in memory.c)
@@ -246,7 +299,9 @@ namespace {
 bool Memory::Initialize(const uint8* romBuffer, size_t romSize, EmDevice& device) {
     bool success = true;
 
-#if defined(ESP_PLATFORM)
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+    ResetBankTable();
+#elif defined(ESP_PLATFORM)
     if (gEmMemBanks == nullptr) {
         gEmMemBanks = static_cast<EmAddressBank**>(calloc(65536, sizeof(EmAddressBank*)));
         if (gEmMemBanks == nullptr) return false;
@@ -258,6 +313,15 @@ bool Memory::Initialize(const uint8* romBuffer, size_t romSize, EmDevice& device
     const uint32 dirtyPagesSize =
         regionMap.GetTotalSize() / 8192 + (regionMap.GetTotalSize() % 8192 == 0 ? 0 : 1);
 
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+    // The host reserved the space for Palm's memory before anything else could split the largest
+    // internal RAM block (classic ESP32: the block only just fits). Release it right before
+    // allocating so this allocation lands there.
+    if (gPalmCydReservedMemory) {
+        free(gPalmCydReservedMemory);
+        gPalmCydReservedMemory = nullptr;
+    }
+#endif
     memory = make_unique<uint8[]>(regionMap.GetTotalSize());
     dirtyPages = make_unique<uint8[]>(dirtyPagesSize);
 
@@ -289,7 +353,11 @@ bool Memory::Initialize(const uint8* romBuffer, size_t romSize, EmDevice& device
 
     // Clear everything out.
 
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+    ResetBankTable();
+#else
     memset(gEmMemBanks, 0, sizeof(gEmMemBanks));
+#endif
 
     // Initialize the valid memory banks.
 
@@ -395,8 +463,21 @@ void Memory::Dispose(void) {
 
 emuptr gEmMemFetchBase = 1;
 uint8* gEmMemFetchHost = nullptr;
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+EmMemReadCacheEntry* gEmMemReadCache = nullptr;
+EmMemWriteCacheEntry* gEmMemWriteCache = nullptr;
+
+// PalmCYD (classic ESP32): tables whose fields are all 32 bits wide go to the 32-bit-only IRAM heap
+// (free otherwise) instead of the DRAM region Palm's memory needs.
+void* EmMemAllocate32(size_t size) {
+    void* p = heap_caps_malloc_prefer(size, 2, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT, MALLOC_CAP_32BIT);
+    if (!p) abort();
+    return p;
+}
+#else
 EmMemReadCacheEntry gEmMemReadCache[256];
 EmMemWriteCacheEntry gEmMemWriteCache[256];
+#endif
 
 namespace {
     // Set when a write cache entry relies on SRAM write protection being off.
@@ -404,6 +485,12 @@ namespace {
 }
 
 void EmMemInvalidateCaches(void) {
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+    if (!gEmMemReadCache) {
+        gEmMemReadCache = static_cast<EmMemReadCacheEntry*>(EmMemAllocate32(256 * sizeof(EmMemReadCacheEntry)));
+        gEmMemWriteCache = static_cast<EmMemWriteCacheEntry*>(EmMemAllocate32(256 * sizeof(EmMemWriteCacheEntry)));
+    }
+#endif
     gEmMemFetchBase = 1;
     writeCacheDependsOnProtection = false;
     EmBankRegs::ForgetCacheableHosts();
@@ -600,6 +687,10 @@ namespace {
         if (gRAM_MetaMemory) {
             meta = bank->xlatemetaaddr(base);
         } else {
+#if defined(PALMCYD_NO_META_MEMORY)
+            // No meta memory at all (classic ESP32): the write cache does not look at it (EmMemPut*).
+            meta = nullptr;
+#else
             // No meta memory (all zero, see EmBankSRAM::EnsureMetaMemory): check a shared zero
             // page instead. It covers a whole bank plus the 4 bytes a long write may look at.
             // Allocated once (64KB, PSRAM) and kept; the Palm V also uses it until its first mark.
@@ -607,6 +698,7 @@ namespace {
             if (!zeroMeta) zeroMeta = (uint8*)Platform::AllocateMemoryClear(0x10000 + 4);
             if (!zeroMeta) return;
             meta = zeroMeta;
+#endif
         }
 
         // DRAM uses the unmasked address for meta memory and SRAM the masked one; both agree
@@ -642,10 +734,25 @@ void EmMemPut8Slow(emuptr addr, uint8 b) {
 void Memory::InitializeBanks(EmAddressBank& iBankInitializer, int32 iStartingBankIndex,
                              int32 iNumberOfBanks) {
     EmMemInvalidateCaches();
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+    const int32 end = iStartingBankIndex + iNumberOfBanks;
+    for (int32 aBankIndex = iStartingBankIndex; aBankIndex < end;) {
+        EmAddressBank** uniform;
+        if ((aBankIndex & 0xFF) == 0 && aBankIndex + 256 <= end &&
+            (uniform = UniformFor(&iBankInitializer)) != nullptr) {
+            gEmMemBanksL1[aBankIndex >> 8] = uniform;  // the whole block is this bank
+            aBankIndex += 256;
+        } else {
+            EmMemSetBankSlot(aBankIndex, &iBankInitializer);
+            aBankIndex++;
+        }
+    }
+#else
     for (int32 aBankIndex = iStartingBankIndex; aBankIndex < iStartingBankIndex + iNumberOfBanks;
          aBankIndex++) {
         gEmMemBanks[aBankIndex] = &iBankInitializer;
     }
+#endif
 }
 
 // ---------------------------------------------------------------------------

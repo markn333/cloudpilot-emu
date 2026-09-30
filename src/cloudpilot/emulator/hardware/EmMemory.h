@@ -63,7 +63,14 @@ typedef struct EmAddressBank {
 
 #ifndef ECM_DYNAMIC_PATCH
 
-#if defined(ESP_PLATFORM)
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+// PalmCYD (classic ESP32, no PSRAM): the bank table in two levels. gEmMemBanksL1[addr >> 24]
+// points to 256 banks for (addr >> 16) & 0xFF: a block that is one bank throughout shares a
+// uniform array, a mixed block has its own. A few KB instead of 256KB.
+extern EmAddressBank*** gEmMemBanksL1;  // 256 entries, 32-bit-only IRAM
+void EmMemSetBankSlot(uint32 index, EmAddressBank* bank);
+void* EmMemAllocate32(size_t size);  // 32-bit-only IRAM if available (all fields 32 bits wide)
+#elif defined(ESP_PLATFORM)
 // PalmCYD: 256KB の表は内部 RAM に入らないため、起動時に PSRAM から確保する
 extern EmAddressBank** gEmMemBanks;
 #else
@@ -84,9 +91,15 @@ extern EmAddressBank** gDynEmMemBanksP;
 
     #define EmMemBankIndex(addr) (((emuptr)(addr)) >> 16)
 
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+    #define EmMemGetBankPtr(addr) \
+        (gEmMemBanksL1[((emuptr)(addr)) >> 24][(((emuptr)(addr)) >> 16) & 0xFF])
+    #define EmMemPutBank(addr, b) EmMemSetBankSlot(EmMemBankIndex(addr), (b))
+#else
     #define EmMemGetBankPtr(addr) (gEmMemBanks[EmMemBankIndex(addr)])
-    #define EmMemGetBank(addr) (*EmMemGetBankPtr(addr))
     #define EmMemPutBank(addr, b) (gEmMemBanks[EmMemBankIndex(addr)] = (b))
+#endif
+    #define EmMemGetBank(addr) (*EmMemGetBankPtr(addr))
 
 #else  // ECM_DYNAMIC_PATCH
 
@@ -112,7 +125,13 @@ typedef struct EmMemReadCacheEntry {
     uint8* host;  // host address of base
 } EmMemReadCacheEntry;
 
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+// PalmCYD (classic ESP32): allocated in the 32-bit-only IRAM heap (all fields are 32 bits wide),
+// which keeps the main DRAM region free for Palm's memory.
+extern EmMemReadCacheEntry* gEmMemReadCache;
+#else
 extern EmMemReadCacheEntry gEmMemReadCache[256];
+#endif
 
 #define EmMemReadCacheEntryFor(addr) (&gEmMemReadCache[((addr) >> 16) & 0xFF])
 
@@ -132,7 +151,11 @@ typedef struct EmMemWriteCacheEntry {
     uint8* dirty;  // dirty page bitmap of that region
 } EmMemWriteCacheEntry;
 
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+extern EmMemWriteCacheEntry* gEmMemWriteCache;
+#else
 extern EmMemWriteCacheEntry gEmMemWriteCache[256];
+#endif
 
 #define EmMemWriteCacheEntryFor(addr) (&gEmMemWriteCache[((addr) >> 16) & 0xFF])
 
@@ -235,7 +258,11 @@ STATIC_INLINE void EmMemPut32(emuptr addr, uint32 l) {
         EmMemDoPut32(entry->host + offset, l);
         EmMemMarkRamDirty(entry->dirty, phy);
         EmMemMarkRamDirty(entry->dirty, phy + 2);
+    #if !defined(PALMCYD_NO_META_MEMORY)
         if (((meta[0] | meta[1]) & EmMemScreenBits16) != 0) EmMemScreenWritten(addr, addr + 4);
+    #else
+        (void)meta;
+    #endif
 
         return;
     }
@@ -261,8 +288,10 @@ STATIC_INLINE void EmMemPut16(emuptr addr, uint16 w) {
 
         EmMemDoPut16(entry->host + offset, w);
         EmMemMarkRamDirty(entry->dirty, phy);
+    #if !defined(PALMCYD_NO_META_MEMORY)
         if ((*(const uint16*)(entry->meta + offset) & EmMemScreenBits16) != 0)
             EmMemScreenWritten(addr, addr + 2);
+    #endif
 
         return;
     }
@@ -288,7 +317,9 @@ STATIC_INLINE void EmMemPut8(emuptr addr, uint8 b) {
 
         EmMemDoPut8(entry->host + offset, b);
         EmMemMarkRamDirty(entry->dirty, phy);
+    #if !defined(PALMCYD_NO_META_MEMORY)
         if ((entry->meta[offset] & EmMemScreenBits8) != 0) EmMemScreenWritten(addr, addr);
+    #endif
 
         return;
     }

@@ -142,6 +142,12 @@ void EmBankSRAM::Reset(Bool /*hardwareReset*/) {
 bool EmBankSRAM::EnsureMetaMemory(void) {
     if (gRAM_MetaMemory) return true;
 
+#if defined(PALMCYD_NO_META_MEMORY)
+    // PalmCYD (classic ESP32): no room for meta memory (as large as RAM). Nothing is marked: the
+    // host takes the whole (small) screen every frame and compares it with the previous one.
+    return false;
+#endif
+
     gRAM_MetaMemory = (uint8*)Platform::AllocateMemoryClear(ramSize);
     if (!gRAM_MetaMemory) {
         // Without meta memory the screen would silently stop updating (EmRegsEZ::MarkScreen

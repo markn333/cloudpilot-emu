@@ -37,9 +37,16 @@ extern "C" {
 extern int areg_byteinc[];
 extern int imm8_table[];
 
+#if defined(PALMCYD_TWO_LEVEL_BANKS)
+// PalmCYD (classic ESP32): constant tables in flash (EmCPU68K.cpp), not in RAM.
+extern const int movem_index1[256];
+extern const int movem_index2[256];
+extern const int movem_next[256];
+#else
 extern int movem_index1[256];
 extern int movem_index2[256];
 extern int movem_next[256];
+#endif
 
 typedef unsigned long cpuop_func (uae_u32) REGPARAM;
 

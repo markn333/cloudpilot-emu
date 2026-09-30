@@ -253,7 +253,11 @@ static const DeviceInfo kDeviceInfo[] = {
      "Pilot",
      {"Pilot", "Pilot1000", "Pilot5000", "TD", "Touchdown"},
      kSupports68328,
+#if defined(ESP_PLATFORM)
+     128,  // PalmCYD: the classic ESP32 (no PSRAM) has room for the Pilot 1000's 128KB only
+#else
      1024,
+#endif
      hwrMiscFlagIDTouchdown,
      hwrMiscFlagExtSubIDNone,
      {}},
