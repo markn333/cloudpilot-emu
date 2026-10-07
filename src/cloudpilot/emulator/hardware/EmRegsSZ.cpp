@@ -1146,6 +1146,7 @@ void EmRegsSZ::Initialize(void) {
     systemCycles = gSession->GetSystemCycles();
     tmr1LastProcessedSystemCycles = systemCycles;
     tmr2LastProcessedSystemCycles = systemCycles;
+    EmHAL::gCycleNow = systemCycles;
 
     fUART[0] = new EmUARTDragonball(EmUARTDragonball::kUART_DragonballVZ, 0);
     fUART[1] = new EmUARTDragonball(EmUARTDragonball::kUART_DragonballVZ, 1);
@@ -1167,6 +1168,7 @@ void EmRegsSZ::Reset(Bool hardwareReset) {
     UnmarkScreen();
 
     if (hardwareReset) {
+        SyncSystemCycles();
         tmr1LastProcessedSystemCycles = systemCycles;
         tmr2LastProcessedSystemCycles = systemCycles;
 
@@ -1259,6 +1261,7 @@ void EmRegsSZ::Load(SavestateLoader<ChunkType>& loader) {
     clutDirty = true;
 
     systemCycles = gSession->GetSystemCycles();
+    EmHAL::gCycleNow = systemCycles;
     UpdateTimers();
     powerOffCached = GetAsleep();
 
@@ -1266,6 +1269,9 @@ void EmRegsSZ::Load(SavestateLoader<ChunkType>& loader) {
     UpdateFramebufferLocation();
 
     if (version < 2) padcFifoReadIndex = 0;
+
+    // Make sure Cycle() runs right away to handle afterLoad.
+    EmHAL::gNextCycleEvent = 0;
 }
 
 template <typename T>
@@ -1766,6 +1772,24 @@ inline void EmRegsSZ::Cycle(uint64 systemCycles, Bool sleeping) {
 
     this->systemCycles = systemCycles;
     if (unlikely(systemCycles >= nextTimerEventAfterCycle)) UpdateTimers();
+
+    PublishNextCycleEvent();
+}
+
+// PalmCYD: as in EmRegsEZ / EmRegsVZ, the CPU loop only calls Cycle() when an event is due, so
+// this->systemCycles can lag behind. Bring it up to the cycle count of the last executed instruction
+// before using it.
+void EmRegsSZ::SyncSystemCycles() {
+    // Same value the original per-instruction Cycle() would have stored (it returned early
+    // while powered off, leaving systemCycles alone).
+    if (!powerOffCached) systemCycles = EmHAL::gCycleNow;
+}
+
+void EmRegsSZ::PublishNextCycleEvent() {
+    // Only take the fast path if we are the only cycle consumer (the UARTs add one in sync mode).
+    // While afterLoad is pending, keep dispatching every instruction so that Cycle() handles it.
+    EmHAL::gNextCycleEvent =
+        (EmHAL::CycleConsumerCount() == 1 && !afterLoad) ? nextTimerEventAfterCycle : 0;
 }
 
 void EmRegsSZ::SetUARTSync(bool sync) {
@@ -3878,6 +3902,12 @@ int32 EmRegsSZ::GetSysClk() {
 }
 
 void EmRegsSZ::UpdateTimers() {
+    SyncSystemCycles();
+    UpdateTimersImpl();
+    PublishNextCycleEvent();
+}
+
+void EmRegsSZ::UpdateTimersImpl() {
     nextTimerEventAfterCycle = ~0;
     if (GetAsleep()) return;
 

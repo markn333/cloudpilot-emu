@@ -68,8 +68,9 @@ inline void Byteswap(int32_t& v) { v = (int32)BYTE_SWAP_32(v); }
 
 inline void Byteswap(uint32_t& v) { v = (uint32)BYTE_SWAP_32(v); }
 
-#if defined(__XTENSA__)
-// PalmCYD: xtensa (ESP32) では int32_t / uint32_t が long 型なので、int / unsigned int 版を追加する
+#if defined(__XTENSA__) || defined(ESP_PLATFORM)
+// PalmCYD: ESP-IDF（xtensa の ESP32 / S3、RISC-V の ESP32-P4）では int32_t / uint32_t が long 型なので、
+// int / unsigned int 版を追加する
 inline void Byteswap(int& v) { v = (int)BYTE_SWAP_32(v); }
 
 inline void Byteswap(unsigned int& v) { v = (unsigned int)BYTE_SWAP_32(v); }

@@ -355,9 +355,9 @@ class PAS {
 // Macro for creating the class that wraps up simple types.
 // ======================================================================
 
-// PalmCYD: xtensa (ESP32) では Int32 / UInt32 が long 型になり、int からの代入が曖昧になるため
-// int / unsigned int を受け取る代入演算子を追加する（他のプラットフォームでは何もしない）
-#if defined(__XTENSA__)
+// PalmCYD: ESP-IDF（xtensa の ESP32 / S3、RISC-V の ESP32-P4）では Int32 / UInt32 が long 型になり、
+// int からの代入が曖昧になるため int / unsigned int を受け取る代入演算子を追加する（他のプラットフォームでは何もしない）
+#if defined(__XTENSA__) || defined(ESP_PLATFORM)
 #define EM_ALIAS_INT_ASSIGN(cls)                                                               cls& operator=(const int v) { return operator=(static_cast<Int32>(v)); }                 cls& operator=(const unsigned int v) { return operator=(static_cast<UInt32>(v)); }
 #else
 #define EM_ALIAS_INT_ASSIGN(cls)
